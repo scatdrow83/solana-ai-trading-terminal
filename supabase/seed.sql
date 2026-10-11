@@ -1,0 +1,1 @@
+-- Intentionally empty. No fictional market scan or wallet data is seeded.
