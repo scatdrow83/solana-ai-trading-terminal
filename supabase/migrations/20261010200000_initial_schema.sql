@@ -121,7 +121,7 @@ create table public.trading_signals (
   user_id uuid not null references auth.users (id) on delete cascade,
   strategy_id uuid references public.strategies (id) on delete set null,
   token_id uuid not null references public.tokens (id) on delete cascade,
-  signal text not null check (signal in ('watch', 'paper_buy', 'paper_sell', 'blocked')),
+  signal text not null check (signal in ('watch', 'buy', 'sell', 'blocked')),
   rationale text,
   created_at timestamptz not null default now()
 );
@@ -134,7 +134,7 @@ create table public.orders (
   token_id uuid not null references public.tokens (id) on delete restrict,
   idempotency_key text not null,
   side text not null check (side in ('buy', 'sell')),
-  mode text not null default 'paper' check (mode in ('paper', 'live')),
+  mode text not null default 'live' check (mode = 'live'),
   status text not null default 'pending'
     check (status in ('pending', 'submitted', 'confirmed', 'failed', 'unknown', 'cancelled')),
   requested_amount_base_units numeric(78, 0) not null
@@ -142,8 +142,7 @@ create table public.orders (
   quoted_price_usd numeric(38, 18),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (user_id, idempotency_key),
-  check (mode <> 'live')
+  unique (user_id, idempotency_key)
 );
 
 create table public.transactions (

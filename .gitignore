@@ -1,11 +1,16 @@
 node_modules/
+.pnpm-store/
 .next/
 dist/
 coverage/
 .turbo/
+*.tsbuildinfo
+__pycache__/
 .env
 .env.*
 !.env.example
+!.env.staging.example
+!.env.production.example
 !.env.*.example
 *.log
 .DS_Store

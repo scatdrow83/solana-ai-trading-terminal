@@ -1,6 +1,6 @@
 export type ProviderStatus = "configured" | "provider_not_configured";
 
-export type TradingMode = "paper";
+export type TradingMode = "live";
 
 export interface HealthStatus {
   status: "ok";

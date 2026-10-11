@@ -7,11 +7,13 @@
     "node": ">=22.14.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @solana-terminal/web --filter @solana-terminal/api --filter @solana-terminal/worker dev",
+    "dev": "pnpm --parallel --filter @solana-terminal/web --filter @solana-terminal/worker dev",
+    "dev:api": "python3 apps/api/app.py",
     "build": "pnpm --recursive build",
     "lint": "eslint .",
     "typecheck": "pnpm --recursive typecheck",
-    "test": "pnpm --filter @solana-terminal/risk-engine test"
+    "test": "pnpm --filter @solana-terminal/risk-engine test",
+    "test:api": "python3 -m unittest discover -s apps/api/tests"
   },
   "devDependencies": {
     "@eslint/js": "9.22.0",
