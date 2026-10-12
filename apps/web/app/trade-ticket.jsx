@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { VersionedTransaction } from "@solana/web3.js";
+import { useLocale } from "./locale-provider";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -61,6 +62,7 @@ export default function TradeTicket({
   tradeStatus,
   onTradeComplete
 }) {
+  const { t } = useLocale();
   const [side, setSide] = useState("buy");
   const [amount, setAmount] = useState("0.01");
   const [order, setOrder] = useState(null);
@@ -79,11 +81,11 @@ export default function TradeTicket({
     setResult(null);
     setOrder(null);
     if (!walletAddress) {
-      setError("Connect your Solana wallet before requesting an order.");
+      setError(t("trade.connectBeforeOrder"));
       return;
     }
     if (!tradeStatus?.enabled) {
-      setError("Live swaps are unavailable until a Jupiter API key is configured.");
+      setError(t("trade.notConfigured"));
       return;
     }
     setBusy(true);
@@ -104,11 +106,11 @@ export default function TradeTicket({
         nextOrder.inputMint !== (side === "buy" ? SOL_MINT : market.mintAddress) ||
         nextOrder.outputMint !== (side === "buy" ? market.mintAddress : SOL_MINT)
       ) {
-        throw new Error("Jupiter returned an invalid or unexpected order.");
+        throw new Error(t("trade.invalidOrder"));
       }
       setOrder(nextOrder);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not request a Jupiter order.");
+      setError(requestError instanceof Error ? requestError.message : t("trade.requestFailed"));
     } finally {
       setBusy(false);
     }
@@ -117,7 +119,7 @@ export default function TradeTicket({
   const signAndExecute = async () => {
     if (!order || !walletSigner || !walletAddress) return;
     if (walletSigner.publicKey?.toBase58() !== walletAddress) {
-      setError("The account wallet changed. Unlock it again and request a fresh order.");
+      setError(t("trade.walletChanged"));
       setOrder(null);
       return;
     }
@@ -133,7 +135,7 @@ export default function TradeTicket({
         transaction.message.header.numRequiredSignatures
       );
       if (!requiredSigners.some((key) => key.toBase58() === walletAddress)) {
-        throw new Error("The quoted transaction does not require a signature from this wallet.");
+        throw new Error(t("trade.signatureMissing"));
       }
       transaction.sign([walletSigner]);
       const response = await postTrade({
@@ -149,8 +151,8 @@ export default function TradeTicket({
       setOrder(null);
       setError(
         requestError instanceof Error
-          ? `${requestError.message}. Check your wallet and transaction activity before retrying.`
-          : "Swap status is unknown. Check your wallet and transaction activity before retrying."
+          ? t("trade.retryCheck", { error: requestError.message })
+          : t("trade.unknownStatus")
       );
     } finally {
       setBusy(false);
@@ -167,43 +169,43 @@ export default function TradeTicket({
       <div className="panel-heading">
         <div>
           <div className="panel-title-line">
-            <h2>Swap on Solana Mainnet</h2>
-            <span className="mainnet-badge">REAL FUNDS</span>
+            <h2>{t("trade.title")}</h2>
+              <span className="mainnet-badge">{t("trade.realFunds")}</span>
           </div>
-          <p>Non-custodial execution through Jupiter Swap API v2</p>
+          <p>{t("trade.nonCustodial")}</p>
         </div>
-        <span className="panel-menu"><span className="status-dot" />MAINNET</span>
+        <span className="panel-menu"><span className="status-dot" />{t("trade.mainnet")}</span>
       </div>
 
       <div className="trade-warning" role="note">
-        <strong>Mainnet transactions use real funds.</strong>
-        <span>Verify both mint addresses and the amount. The next step signs with your unlocked account wallet in this browser and submits a real transaction.</span>
+        <strong>{t("trade.warningTitle")}</strong>
+        <span>{t("trade.warningBody")}</span>
       </div>
 
       {!tradeStatus?.enabled && (
         <div className="trade-setup" role="status">
-          Live swaps require a Jupiter API key on the API server.
-          <a href="https://portal.jup.ag/" target="_blank" rel="noreferrer">Get a Jupiter API key <span aria-hidden="true">↗</span></a>
+          {t("trade.setupRequired")}
+          <a href="https://portal.jup.ag/" target="_blank" rel="noreferrer">{t("trade.getApiKey")} <span aria-hidden="true">↗</span></a>
         </div>
       )}
 
-      <div className="trade-direction" aria-label="Swap direction">
+      <div className="trade-direction" aria-label={t("trade.direction")}>
         <button
           type="button"
           className={side === "buy" ? "active" : ""}
           onClick={() => { setSide("buy"); setOrder(null); setError(null); setResult(null); }}
           disabled={busy}
-        >Buy {market.symbol}</button>
+        >{t("trade.buy", { symbol: market.symbol })}</button>
         <button
           type="button"
           className={side === "sell" ? "active" : ""}
           onClick={() => { setSide("sell"); setOrder(null); setError(null); setResult(null); }}
           disabled={busy}
-        >Sell {market.symbol}</button>
+        >{t("trade.sell", { symbol: market.symbol })}</button>
       </div>
 
       <form className="trade-form" onSubmit={(event) => void getOrder(event)}>
-        <label htmlFor="trade-amount">{side === "buy" ? "You pay · SOL" : `You sell · ${market.symbol}`}</label>
+        <label htmlFor="trade-amount">{side === "buy" ? t("trade.youPaySol") : t("trade.youSell", { symbol: market.symbol })}</label>
         <div className="trade-amount-row">
           <input
             id="trade-amount"
@@ -219,53 +221,53 @@ export default function TradeTicket({
           />
           <span>{side === "buy" ? "SOL" : market.symbol}</span>
         </div>
-        {side === "buy" && <small className="trade-limit">Maximum per buy: {tradeStatus?.maxBuySol ?? 1} SOL</small>}
+        {side === "buy" && <small className="trade-limit">{t("trade.maximumPerBuy", { amount: tradeStatus?.maxBuySol ?? 1 })}</small>}
         <div className="trade-asset-line">
-          <span>{side === "buy" ? "You receive" : "You receive · SOL"}</span>
+          <span>{side === "buy" ? t("trade.youReceive") : t("trade.youReceiveSol")}</span>
           <strong>{side === "buy" ? market.symbol : "SOL"}</strong>
         </div>
         <button
           className="button button-secondary trade-quote-button"
           type="submit"
           disabled={busy || !walletAddress || !tradeStatus?.enabled || !market.mintAddress || market.mintAddress === SOL_MINT}
-        >{busy ? "Working…" : "Get fresh Jupiter quote"}</button>
+        >{busy ? t("trade.working") : t("trade.getQuote")}</button>
       </form>
 
-      {market.mintAddress === SOL_MINT && <p className="trade-inline-note">Select a token market first to create a swap order.</p>}
-      {!walletAddress && <span className="text-button trade-connect">Sign in and unlock your account wallet to continue <span aria-hidden="true">→</span></span>}
+      {market.mintAddress === SOL_MINT && <p className="trade-inline-note">{t("trade.selectMarket")}</p>}
+      {!walletAddress && <span className="text-button trade-connect">{t("trade.unlockPrompt")} <span aria-hidden="true">→</span></span>}
 
       {order && (
-        <section className="order-review" aria-label="Review swap order">
-          <div className="order-review-heading"><strong>Review before wallet signature</strong><span>QUOTE · {order.router}</span></div>
+        <section className="order-review" aria-label={t("trade.orderReview")}>
+          <div className="order-review-heading"><strong>{t("trade.reviewBeforeSign")}</strong><span>{t("trade.quote", { router: order.router })}</span></div>
           <div className="order-review-amounts">
-            <div><span>Pay</span><strong>{formatAtomic(order.inputAmount, order.inputDecimals)} {side === "buy" ? "SOL" : market.symbol}</strong></div>
+            <div><span>{t("trade.pay")}</span><strong>{formatAtomic(order.inputAmount, order.inputDecimals)} {side === "buy" ? "SOL" : market.symbol}</strong></div>
             <span aria-hidden="true">→</span>
-            <div><span>Estimated receive</span><strong>{outputAmount} {side === "buy" ? market.symbol : "SOL"}</strong></div>
+            <div><span>{t("trade.estimatedReceive")}</span><strong>{outputAmount} {side === "buy" ? market.symbol : "SOL"}</strong></div>
           </div>
           <div className="order-mints">
-            <span>Input mint <code>{order.inputMint}</code></span>
-            <span>Output mint <code>{order.outputMint}</code></span>
+            <span>{t("trade.inputMint")} <code>{order.inputMint}</code></span>
+            <span>{t("trade.outputMint")} <code>{order.outputMint}</code></span>
           </div>
-          <p>The quote expires quickly. Selecting the button signs with the account wallet unlocked in this browser and submits the transaction to Jupiter on Mainnet.</p>
+          <p>{t("trade.quoteWarning")}</p>
           <button className="button button-live" onClick={() => void signAndExecute()} disabled={busy}>
-            {busy ? "Signing / submitting…" : "Sign & submit Mainnet swap"}
+            {busy ? t("trade.signing") : t("trade.submit")}
           </button>
-          <button className="text-button order-cancel" onClick={() => setOrder(null)} disabled={busy}>Cancel quote</button>
+          <button className="text-button order-cancel" onClick={() => setOrder(null)} disabled={busy}>{t("trade.cancelQuote")}</button>
         </section>
       )}
 
       {error && <div className="trade-feedback is-error" role="alert">{error}</div>}
       {result && (
         <div className={`trade-feedback ${result.status === "Success" ? "is-success" : "is-error"}`} role="status">
-          <strong>{result.status === "Success" ? "Swap confirmed by Jupiter" : "Jupiter reported a failed swap"}</strong>
-          {result.signature && <a href={`https://solscan.io/tx/${encodeURIComponent(result.signature)}`} target="_blank" rel="noreferrer">View Mainnet transaction <span aria-hidden="true">↗</span></a>}
+          <strong>{result.status === "Success" ? t("trade.swapConfirmed") : t("trade.swapFailed")}</strong>
+          {result.signature && <a href={`https://solscan.io/tx/${encodeURIComponent(result.signature)}`} target="_blank" rel="noreferrer">{t("trade.viewTransaction")} <span aria-hidden="true">↗</span></a>}
           {result.error && <span>{result.error}</span>}
         </div>
       )}
       <div className="trade-wallet-line">
         <span className={`status-dot ${walletAddress ? "" : "is-offline"}`} />
-        {walletAddress ? `Connected wallet · ${walletAddress}` : "Wallet not connected"}
-        <span className="trade-custody-note">Your key is decrypted only in this browser session.</span>
+        {walletAddress ? t("trade.connectedWallet", { address: walletAddress }) : t("trade.walletDisconnected")}
+        <span className="trade-custody-note">{t("trade.browserKeyNote")}</span>
       </div>
     </article>
   );

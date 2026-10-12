@@ -6,6 +6,7 @@
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
+    "test": "vitest run app/i18n.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

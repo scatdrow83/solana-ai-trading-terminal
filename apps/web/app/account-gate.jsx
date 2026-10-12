@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Keypair } from "@solana/web3.js";
+import LanguageSelector from "./language-selector";
+import { useLocale } from "./locale-provider";
 
 const KDF_ITERATIONS = 600_000;
 
@@ -109,6 +111,7 @@ async function postAuth(payload) {
 }
 
 export default function AccountGate({ onUnlocked }) {
+  const { t } = useLocale();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [adminBootstrapToken, setAdminBootstrapToken] = useState("");
@@ -271,83 +274,84 @@ export default function AccountGate({ onUnlocked }) {
     password === "admin";
 
   if (loading) {
-    return <main className="account-shell"><div className="account-card"><span className="eyebrow">SOLANA MAINNET</span><h1>Loading your account…</h1></div></main>;
+    return <main className="account-shell"><div className="account-card"><LanguageSelector /><span className="eyebrow">{t("account.solanaMainnet")}</span><h1>{t("account.loading")}</h1></div></main>;
   }
 
   return (
     <main className="account-shell">
       <section className="account-card">
+        <LanguageSelector />
         <a className="brand account-brand" href="/" aria-label="Solana Terminal home">
           <span className="brand-mark"><span /><span /><span /></span>
           <span className="brand-name">solana<span>terminal</span></span>
         </a>
-        <p className="eyebrow account-eyebrow">SOLANA MAINNET · PERSONAL ACCOUNT</p>
-        <h1>{mode === "register" ? "Create your account." : "Welcome back."}</h1>
+        <p className="eyebrow account-eyebrow">{t("account.personalAccount")}</p>
+        <h1>{mode === "register" ? t("account.createTitle") : t("account.welcomeTitle")}</h1>
         <p className="account-subtitle">
           {mode === "register"
-            ? "Registration generates a new Solana wallet and assigns its public address to your account."
+            ? t("account.createPublicWallet")
             : account
-              ? `Unlock the encrypted wallet for ${account.email}.`
-              : "Sign in to unlock your encrypted Solana wallet."}
+              ? `${t("account.unlockDescription")} (${account.email})`
+              : t("account.unlockDescription")}
         </p>
 
         {error && <div className="trade-feedback is-error" role="alert">{error}</div>}
 
         {mode === "register" && !newKeypair ? (
           <form className="account-form" onSubmit={(event) => { event.preventDefault(); generateWallet(); }}>
-            <label htmlFor="account-email">Email</label>
+            <label htmlFor="account-email">{t("account.email")}</label>
             <input id="account-email" type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required />
-            <label htmlFor="account-password">Account password</label>
+            <label htmlFor="account-password">{t("account.password")}</label>
             <input id="account-password" type="password" autoComplete="new-password" minLength={demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? 5 : 12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
-            <small>{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? "Local demo credentials only: admin / admin. Never fund the demo wallet." : "At least 12 characters. This password encrypts your wallet key in your browser."}</small>
-            <button className="button button-primary" type="submit">{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? "Generate local demo wallet" : "Generate my Solana wallet"}</button>
+            <small>{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? t("account.demoPasswordHint") : t("account.passwordEncryptionHint")}</small>
+            <button className="button button-primary" type="submit">{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? t("account.generateDemoWallet") : t("account.generateWallet")}</button>
           </form>
         ) : mode === "register" ? (
           <form className="account-form" onSubmit={(event) => void submitRegister(event)}>
-            <label htmlFor="account-email">Email</label>
+            <label htmlFor="account-email">{t("account.email")}</label>
             <input id="account-email" type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required />
-            <label htmlFor="account-password">Account password</label>
+            <label htmlFor="account-password">{t("account.password")}</label>
             <input id="account-password" type="password" autoComplete="new-password" minLength={demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? 5 : 12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
             {!isDemoSignup && <>
-              <label htmlFor="admin-bootstrap-token">Admin bootstrap token <span>(administrator accounts only)</span></label>
+              <label htmlFor="admin-bootstrap-token">{t("account.adminBootstrap")} <span>{t("account.adminOnly")}</span></label>
               <input id="admin-bootstrap-token" type="password" autoComplete="off" maxLength={64} value={adminBootstrapToken} onChange={(event) => setAdminBootstrapToken(event.target.value)} />
-              <small>Only enter this if an operator explicitly provisioned your email as an administrator.</small>
+              <small>{t("account.adminBootstrapHint")}</small>
             </>}
             {isDemoSignup ? (
               <div className="demo-account-notice" role="note">
-                <strong>Local demo only · never fund this wallet</strong>
-                <small>This account has no funds, cannot place Mainnet swaps, and uses a weak test password. Do not reuse these credentials anywhere else.</small>
+                <strong>{t("account.localDemo")}</strong>
+                <small>{t("account.localDemoWarning")} {t("account.demoPasswordWarning")}</small>
               </div>
             ) : <div className="wallet-backup-panel">
-              <strong>Back up this wallet secret now</strong>
-              <span>It is shown only on this screen. Anyone with this key can control the wallet. The server only stores its encrypted form.</span>
+              <strong>{t("account.walletBackup")}</strong>
+              <span>{t("account.walletBackupWarning")}</span>
               <code>{JSON.stringify(Array.from(newKeypair.secretKey))}</code>
-              <button className="button button-secondary" type="button" onClick={() => void copySecretKey()}>{copied ? "Copied — store it safely" : "Copy Solana CLI keypair JSON"}</button>
-              <label className="account-checkbox"><input type="checkbox" checked={savedKey} onChange={(event) => setSavedKey(event.target.checked)} /><span>I saved this secret key securely. I understand that losing my password and key can mean permanent loss of access.</span></label>
+              <button className="button button-secondary" type="button" onClick={() => void copySecretKey()}>{copied ? t("account.copiedKey") : t("account.copyKey")}</button>
+              <label className="account-checkbox"><input type="checkbox" checked={savedKey} onChange={(event) => setSavedKey(event.target.checked)} /><span>{t("account.savedKeyConfirmation")}</span></label>
             </div>}
-            <button className="button button-live" type="submit" disabled={busy || (!isDemoSignup && !savedKey)}>{busy ? "Creating account…" : isDemoSignup ? "Create local demo admin" : "Create account & assign wallet"}</button>
+            <button className="button button-live" type="submit" disabled={busy || (!isDemoSignup && !savedKey)}>{busy ? t("account.creating") : isDemoSignup ? t("account.registerButton") : t("account.createAndAssign")}</button>
           </form>
         ) : (
           <form className="account-form" onSubmit={(event) => void submitLogin(event)}>
             {!account && <>
-              <label htmlFor="account-email">Email</label>
+              <label htmlFor="account-email">{t("account.email")}</label>
               <input id="account-email" type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required />
             </>}
-            <label htmlFor="account-password">Account password</label>
+            <label htmlFor="account-password">{t("account.password")}</label>
             <input id="account-password" type="password" autoComplete="current-password" maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
-            {account && <div className="account-address"><span>Assigned Solana address</span><code>{account.walletAddress}</code></div>}
-            <button className="button button-live" type="submit" disabled={busy}>{busy ? "Unlocking…" : account ? "Unlock wallet" : "Sign in & unlock wallet"}</button>
+            {account && <div className="account-address"><span>{t("account.publicAddress")}</span><code>{account.walletAddress}</code></div>}
+            <button className="button button-live" type="submit" disabled={busy}>{busy ? t("account.unlocking") : account ? t("account.unlock") : t("account.enter")}</button>
           </form>
         )}
 
         <div className="account-safety">
-          <strong>{isDemoSignup ? "Local demo account · no Mainnet swaps" : "Self-custody and real Mainnet funds"}</strong>
-          <span>{isDemoSignup ? "This is a local-only account for exercising the admin interface. Never send funds to its generated address." : "The wallet is created on your device. Its key is encrypted with your account password before upload; the API/database cannot decrypt it. There is no password reset recovery for the wallet."}</span>
-          <span>{isDemoSignup ? "Use only on localhost. The demo password is intentionally weak and must never be reused." : "Never share the displayed key. Verify every swap and mint before signing."}</span>
+          <strong>{isDemoSignup ? t("account.demoAccount") : t("account.selfCustody")}</strong>
+          <span>{isDemoSignup ? t("account.demoDetail") : t("account.selfCustodyDetail")}</span>
+          <span>{isDemoSignup ? t("account.demoPasswordWarning") : t("account.keySafety")}</span>
         </div>
         {!account && (
           <button className="text-button account-mode-switch" onClick={() => changeMode(mode === "register" ? "login" : "register")}>
-            {mode === "register" ? "Already registered? Sign in" : "New here? Create an account"}
+            {mode === "register" ? t("account.alreadyRegistered") : t("account.newHere")}
           </button>
         )}
       </section>

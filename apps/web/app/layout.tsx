@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { LocaleProvider } from "./locale-provider";
 
 export const metadata: Metadata = {
   title: "Solana Terminal — Market Intelligence",
-  description: "A local Solana Mainnet terminal with account wallets, live market data, and Jupiter swaps."
+  description: "Read-only Solana wallet intelligence and public market data."
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><LocaleProvider>{children}</LocaleProvider></body>
     </html>
   );
 }

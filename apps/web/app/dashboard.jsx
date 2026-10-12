@@ -5,6 +5,8 @@ import { Keypair } from "@solana/web3.js";
 import AdminWalletPanel from "./admin-wallet-panel";
 import AccountGate from "./account-gate";
 import TradeTicket from "./trade-ticket";
+import LanguageSelector from "./language-selector";
+import { useLocale } from "./locale-provider";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const STATIC_TOKEN_LOGOS = {
@@ -16,6 +18,16 @@ const STATIC_TOKEN_LOGOS = {
 };
 const DEFAULT_WATCHLIST = [SOL_MINT];
 const REFRESH_OPTIONS = [15_000, 30_000, 60_000];
+const NAV_TRANSLATION_KEYS = {
+  overview: "nav.overview",
+  markets: "nav.markets",
+  "new-tokens": "nav.newTokens",
+  watchlist: "nav.watchlist",
+  portfolio: "nav.portfolio",
+  activity: "nav.activity",
+  settings: "nav.settings",
+  admin: "nav.admin"
+};
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "grid", group: "Workspace" },
@@ -124,7 +136,7 @@ function parseMarkets(value) {
   });
 }
 
-function parsePortfolio(value) {
+function parsePortfolio(value, t = (key) => key) {
   if (
     !isRecord(value) ||
     typeof value.walletAddress !== "string" ||
@@ -137,7 +149,7 @@ function parsePortfolio(value) {
     typeof value.truncated !== "boolean" ||
     typeof value.observedAt !== "string"
   ) {
-    throw new Error("The account service returned invalid portfolio data.");
+    throw new Error(t("portfolio.invalidResponse"));
   }
   const balances = value.balances.filter((balance) =>
     isRecord(balance) &&
@@ -149,7 +161,7 @@ function parsePortfolio(value) {
     (balance.valueUsd === null || (typeof balance.valueUsd === "number" && Number.isFinite(balance.valueUsd)))
   );
   if (balances.length !== value.balances.length) {
-    throw new Error("The account service returned invalid portfolio balances.");
+    throw new Error(t("portfolio.invalidBalances"));
   }
   return { ...value, balances };
 }
@@ -178,9 +190,9 @@ function formatPrice(value) {
   }).format(value);
 }
 
-function formatCurrency(value) {
+function formatCurrency(value, locale = "en") {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(locale === "pl" ? "pl-PL" : "en-US", {
     style: "currency",
     currency: "USD",
     notation: value >= 1_000_000 ? "compact" : "standard",
@@ -193,11 +205,11 @@ function formatPercent(value) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
-function formatTime(value) {
+function formatTime(value, locale = "en") {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "—"
-    : new Intl.DateTimeFormat("en-US", {
+    : new Intl.DateTimeFormat(locale === "pl" ? "pl-PL" : "en-US", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit"
@@ -447,6 +459,7 @@ function RecommendationFeed({ onSelect }) {
 }
 
 function TerminalDashboard({ account, walletKeypair, onLogout }) {
+  const { locale, t } = useLocale();
   const [view, setView] = useState("overview");
   const [markets, setMarkets] = useState([]);
   const [newTokens, setNewTokens] = useState([]);
@@ -473,6 +486,8 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
   const [portfolio, setPortfolio] = useState(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState(null);
+  const [portfolioAddressInput, setPortfolioAddressInput] = useState(walletAddress);
+  const [portfolioAddress, setPortfolioAddress] = useState(walletAddress);
 
   const updateTradeHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -490,21 +505,27 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
     }
   }, []);
 
-  const updatePortfolio = useCallback(async () => {
+  const updatePortfolio = useCallback(async (address = portfolioAddress) => {
     setPortfolioLoading(true);
     setPortfolioError(null);
     try {
-      setPortfolio(parsePortfolio(await requestJson("/api/wallet", 25_000)));
+      setPortfolio(parsePortfolio(await requestJson(
+        `/api/wallet?address=${encodeURIComponent(address)}`,
+        25_000
+      ), t));
     } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "";
       setPortfolioError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Wallet balances are unavailable."
+        message === "invalid solana wallet address"
+          ? t("portfolio.invalidAddress")
+          : message === "authentication required"
+            ? t("portfolio.signInRequired")
+            : message || t("portfolio.requestFailed")
       );
     } finally {
       setPortfolioLoading(false);
     }
-  }, []);
+  }, [portfolioAddress, t]);
 
   const updateNewTokens = useCallback(async () => {
     setNewTokens(parseMarkets(await requestJson("/api/market?view=new")));
@@ -566,7 +587,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
     if (view !== "portfolio" || account.isDemo) return;
     let cancelled = false;
     const refresh = async () => {
-      if (!cancelled) await updatePortfolio();
+      if (!cancelled) await updatePortfolio(portfolioAddress);
     };
     void refresh();
     const interval = window.setInterval(() => void refresh(), refreshMs);
@@ -574,7 +595,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [account.isDemo, refreshMs, updatePortfolio, view]);
+  }, [account.isDemo, portfolioAddress, refreshMs, updatePortfolio, view]);
 
   useEffect(() => {
     try {
@@ -660,6 +681,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
   }, [market?.mintAddress, refreshMs, updateNewTokens, updateOverview, updateSelectedMarket, updateWatchlistMarkets, view]);
 
   const pageCopy = VIEW_TITLES[view];
+  const navLabel = (item) => t(NAV_TRANSLATION_KEYS[item.id]);
   const marketConnected = Boolean(lastUpdated && !error);
   const marketChange = market?.priceChange24h ?? null;
 
@@ -765,13 +787,17 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
         </a>
         <div className="workspace-switcher">
           <span className="workspace-avatar">S</span>
-          <span className="workspace-copy"><strong>Personal workspace</strong><small>Local staging</small></span>
+          <span className="workspace-copy"><strong>{t("shell.personalWorkspace")}</strong><small>{t("shell.localStaging")}</small></span>
           <span className="workspace-chevron">⌄</span>
         </div>
         <nav className="side-nav" aria-label="Main navigation">
-          {["Workspace", "Trading", "System"].map((group) => (
+          {[
+            ["Workspace", "nav.workspace"],
+            ["Trading", "nav.trading"],
+            ["System", "nav.system"]
+          ].map(([group, groupKey]) => (
             <div className="nav-group" key={group}>
-              <span className="nav-group-label">{group}</span>
+              <span className="nav-group-label">{t(groupKey)}</span>
               {NAV_ITEMS.filter((item) => item.group === group && (
                 item.id !== "admin" || account.isAdmin
               )).map((item) => (
@@ -779,12 +805,12 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
                   key={item.id}
                   className={`nav-item ${view === item.id ? "active" : ""}`}
                   onClick={() => setView(item.id)}
-                  aria-label={item.label}
-                  title={item.label}
+                  aria-label={navLabel(item)}
+                  title={navLabel(item)}
                   aria-current={view === item.id ? "page" : undefined}
                 >
                   <Icon name={item.icon} size={17} />
-                  <span>{item.label}</span>
+                  <span>{navLabel(item)}</span>
                   {item.id === "watchlist" && <span className="nav-count">{watchlist.length}</span>}
                 </button>
               ))}
@@ -792,6 +818,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
+          <LanguageSelector compact />
           <div className="sidebar-safety"><span className="safety-icon"><Icon name="shield" size={16} /></span><span><strong>{account.isDemo ? "Local demo account" : "Mainnet trading"}</strong><small>{account.isDemo ? "Swap execution disabled" : "Explicit submit required"}</small></span><span className="safety-dot" /></div>
           <div className="sidebar-user"><span className="user-avatar">{account.email.slice(0, 1).toUpperCase()}</span><span className="workspace-copy"><strong>{account.email}</strong><small>{walletAddress.slice(0, 5)}…{walletAddress.slice(-5)}</small></span><button className="icon-button" aria-label="Sign out" onClick={() => void onLogout()}><Icon name="close" size={16} /></button></div>
         </div>
@@ -799,7 +826,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
 
       <main className="main-panel">
         <header className="topbar">
-          <div className="breadcrumbs"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>{NAV_ITEMS.find((item) => item.id === view)?.label}</strong></div>
+          <div className="breadcrumbs"><span>{t("shell.personalWorkspace")}</span><span className="breadcrumb-divider">/</span><strong>{navLabel(NAV_ITEMS.find((item) => item.id === view) ?? NAV_ITEMS[0])}</strong></div>
           <div className="topbar-actions">
             <span className={`connection-status ${marketConnected ? "" : "is-offline"}`}><span className="status-dot" />{marketConnected ? "Markets connected" : error ? "Markets unavailable" : "Connecting to markets"}</span>
             <span className="topbar-divider" />
@@ -810,7 +837,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
 
         <div className="page-content">
           <section className="page-heading">
-            <div><p className="eyebrow">{pageCopy.eyebrow}</p><h1>{pageCopy.title}</h1><p className="page-subtitle">{pageCopy.subtitle}</p></div>
+            <div><p className="eyebrow">{view === "portfolio" ? t("page.portfolioEyebrow") : pageCopy.eyebrow}</p><h1>{view === "portfolio" ? t("page.portfolioTitle") : pageCopy.title}</h1><p className="page-subtitle">{view === "portfolio" ? t("page.portfolioSubtitle") : pageCopy.subtitle}</p></div>
             <div className="heading-actions">
               <span className="read-only-chip"><span className="status-dot" />SOLANA MAINNET</span>
               <button className="button button-secondary refresh-button" onClick={() => void refreshNow()} disabled={isLoading} aria-label="Refresh market data"><Icon name="refresh" size={16} /><span>{isLoading ? "Updating…" : "Refresh"}</span></button>
@@ -915,37 +942,49 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
             </section>
           )}
 
-          {view === "portfolio" && (account.isDemo
-            ? <section className="empty-panel panel"><span className="empty-state-icon"><Icon name="shield" size={24} /></span><span className="eyebrow">LOCAL DEMO WALLET</span><h2>Mainnet balances are disabled</h2><p>The demo account cannot read or trade real wallet assets. Sign in with a non-demo account to view live balances.</p></section>
-            : <section className="panel portfolio-panel">
+          {view === "portfolio" && <section className="panel portfolio-panel">
               <div className="panel-heading">
-                <div><span className="eyebrow">MAINNET WALLET</span><h2>Account portfolio</h2><p><code>{walletAddress}</code></p></div>
-                <div className="portfolio-actions"><span className="status-pill"><span className="status-dot" />Live read-only</span><button className="button button-secondary" onClick={() => void updatePortfolio()} disabled={portfolioLoading}><Icon name="refresh" size={15} />{portfolioLoading ? "Refreshing…" : "Refresh"}</button></div>
+                <div><span className="eyebrow">{t("portfolio.eyebrow")}</span><h2>{t("portfolio.title")}</h2><p>{t("portfolio.subtitle")}</p></div>
+                <span className="status-pill"><span className="status-dot" />{t("portfolio.network")}</span>
               </div>
+              <form className="portfolio-lookup" onSubmit={(event) => {
+                event.preventDefault();
+                if (portfolioAddressInput === portfolioAddress) {
+                  void updatePortfolio(portfolioAddressInput);
+                } else {
+                  setPortfolioAddress(portfolioAddressInput);
+                }
+              }}>
+                <label htmlFor="portfolio-wallet-address">{t("portfolio.address")}</label>
+                <input id="portfolio-wallet-address" autoComplete="off" spellCheck={false} value={portfolioAddressInput} onChange={(event) => setPortfolioAddressInput(event.target.value.trim())} placeholder={t("portfolio.placeholder")} maxLength={44} />
+                <button className="button button-secondary" type="submit" disabled={portfolioLoading || !portfolioAddressInput}><Icon name="search" size={15} />{portfolioLoading ? t("portfolio.refreshing") : t("portfolio.analyze")}</button>
+                {portfolio && <button className="button button-secondary" type="button" onClick={() => void updatePortfolio(portfolioAddress)} disabled={portfolioLoading}><Icon name="refresh" size={15} />{t("portfolio.refresh")}</button>}
+              </form>
               {portfolioError && <div className="trade-feedback is-error" role="alert">{portfolioError}</div>}
+              {account.isDemo && <div className="demo-account-notice"><Icon name="shield" size={17} /><span><strong>{t("portfolio.demo")}</strong><small>{t("portfolio.demoNotice")}</small></span></div>}
               {portfolio && <div className="portfolio-summary">
-                <div><span>Portfolio value</span><strong>{portfolio.totalUsd === null ? "Partial valuation" : formatCurrency(portfolio.totalUsd)}</strong><small>{[
-                  portfolio.unpricedCount ? `${portfolio.unpricedCount} asset${portfolio.unpricedCount === 1 ? "" : "s"} not priced by DexScreener` : null,
-                  portfolio.omittedCount ? `${portfolio.omittedCount} additional assets not scanned` : null
-                ].filter(Boolean).join("; ") || `Updated ${formatTime(portfolio.observedAt)}`}</small></div>
-                {portfolio.totalUsd === null && <div className="portfolio-subtotal"><span>Priced assets subtotal</span><strong>{formatCurrency(portfolio.pricedTotalUsd)}</strong></div>}
-                {portfolio.truncated && <span className="portfolio-truncated">Showing up to 100 of 300 scanned assets</span>}
+                <div><span>{t("portfolio.value")}</span><strong>{portfolio.totalUsd === null ? t("portfolio.partial") : formatCurrency(portfolio.totalUsd, locale)}</strong><small>{[
+                  portfolio.unpricedCount ? t("portfolio.unpriced", { count: portfolio.unpricedCount }) : null,
+                  portfolio.omittedCount ? t("portfolio.omitted", { count: portfolio.omittedCount }) : null
+                ].filter(Boolean).join("; ") || t("portfolio.updated", { time: formatTime(portfolio.observedAt, locale) })}</small></div>
+                {portfolio.totalUsd === null && <div className="portfolio-subtotal"><span>{t("portfolio.pricedSubtotal")}</span><strong>{formatCurrency(portfolio.pricedTotalUsd, locale)}</strong></div>}
+                {portfolio.truncated && <span className="portfolio-truncated">{t("portfolio.truncated")}</span>}
               </div>}
-              {portfolioLoading && !portfolio && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><p>Reading confirmed Solana balances…</p></div>}
+              {portfolioLoading && !portfolio && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><p>{t("portfolio.loading")}</p></div>}
               {portfolio && <div className="history-table-wrap">
-                <table className="history-table portfolio-table"><thead><tr><th>Asset</th><th>Balance</th><th>Price</th><th>Value</th><th>Mint</th></tr></thead>
+                <table className="history-table portfolio-table"><thead><tr><th>{t("portfolio.asset")}</th><th>{t("portfolio.balance")}</th><th>{t("portfolio.price")}</th><th>{t("portfolio.assetValue")}</th><th>{t("portfolio.mint")}</th></tr></thead>
                   <tbody>{portfolio.balances.map((asset) => <tr key={asset.mintAddress}>
                     <td><span className="portfolio-asset"><TokenAvatar market={asset} className="token-icon" /><span><strong>{asset.symbol}</strong><small>{asset.name}</small></span></span></td>
-                    <td>{new Intl.NumberFormat("en-US", { maximumSignificantDigits: 10 }).format(Number(asset.amount))}</td>
-                    <td>{asset.priceUsd === null ? "—" : formatCurrency(asset.priceUsd)}</td>
-                    <td>{asset.valueUsd === null ? "Unpriced" : formatCurrency(asset.valueUsd)}</td>
+                    <td>{new Intl.NumberFormat(locale === "pl" ? "pl-PL" : "en-US", { maximumSignificantDigits: 10 }).format(Number(asset.amount))}</td>
+                    <td>{asset.priceUsd === null ? "—" : formatCurrency(asset.priceUsd, locale)}</td>
+                    <td>{asset.valueUsd === null ? t("portfolio.unpricedValue") : formatCurrency(asset.valueUsd, locale)}</td>
                     <td><a href={`https://solscan.io/account/${encodeURIComponent(asset.mintAddress)}`} target="_blank" rel="noreferrer"><code>{shortMint(asset.mintAddress)}</code><Icon name="arrow" size={13} /></a></td>
                   </tr>)}</tbody>
                 </table>
               </div>}
-              {!portfolioLoading && !portfolioError && portfolio && portfolio.balances.length === 0 && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><h3>No assets found</h3><p>This wallet has no SOL or SPL token balances on Solana Mainnet.</p></div>}
-              <div className="portfolio-footnote">Balances are confirmed from Solana RPC. USD valuations are estimates from DexScreener; unpriced assets are excluded from the total.</div>
-            </section>)}
+              {!portfolioLoading && !portfolioError && portfolio && portfolio.balances.length === 0 && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><h3>{t("portfolio.emptyTitle")}</h3><p>{t("portfolio.emptyBody")}</p></div>}
+              <div className="portfolio-footnote">{t("portfolio.disclaimer")}</div>
+            </section>}
           {view === "activity" && <section className="panel history-panel"><div className="panel-heading"><div><span className="eyebrow">MAINNET ACTIVITY</span><h2>Swap history</h2><p>Recent swaps created by this account</p></div><button className="button button-secondary" onClick={() => void updateTradeHistory()} disabled={historyLoading}><Icon name="refresh" size={15} />{historyLoading ? "Loading…" : "Refresh"}</button></div>{historyError && <div className="trade-feedback is-error" role="alert">{historyError}</div>}{trades.length ? <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Direction</th><th>Assets</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>{trades.map((trade) => <tr key={trade.request_id}><td><span className={`history-side ${trade.side === "buy" ? "is-buy" : "is-sell"}`}>{trade.side}</span></td><td><code>{shortMint(trade.input_mint)} → {shortMint(trade.output_mint)}</code></td><td><span className={`history-status status-${trade.status}`}>{trade.status.replaceAll("_", " ")}</span></td><td>{formatTime(trade.created_at)}</td><td>{trade.signature ? <a href={`https://solscan.io/tx/${encodeURIComponent(trade.signature)}`} target="_blank" rel="noreferrer">View on Solscan <Icon name="arrow" size={13} /></a> : "—"}</td></tr>)}</tbody></table></div> : !historyLoading && !historyError && <div className="history-empty"><span className="empty-state-icon"><Icon name="activity" size={24} /></span><h3>No swaps yet</h3><p>Once you place a swap, its status and on-chain transaction link will appear here.</p><button className="button button-secondary" onClick={() => setView("markets")}>Explore markets<Icon name="arrow" size={15} /></button></div>}</section>}
           {view === "settings" && <section className="panel settings-panel"><div className="panel-heading"><div><h2>Trading & market settings</h2><p>Live swaps on Solana Mainnet require your explicit submit action.</p></div></div><label className="setting-row" htmlFor="refresh-rate"><span><strong>Market refresh interval</strong><small>Applies to live token and overview data.</small></span><select id="refresh-rate" value={refreshMs} onChange={(event) => setRefreshMs(Number(event.target.value))}>{REFRESH_OPTIONS.map((option) => <option value={option} key={option}>{option / 1000} seconds</option>)}</select></label><div className="setting-row"><span><strong>Market data provider</strong><small>Public market prices</small></span><span className="status-pill"><span className="status-dot" />DexScreener</span></div><div className="setting-row"><span><strong>Trading mode</strong><small>Real transactions on Solana Mainnet</small></span><span className="mode-chip"><Icon name="shield" size={14} />Live Mainnet</span></div><div className="setting-row"><span><strong>Swap provider</strong><small>Server-side Jupiter API key required</small></span><span className={tradeStatus?.enabled ? "status-pill" : "disabled-label"}>{tradeStatus?.enabled ? "Ready" : "Setup required"}</span></div><div className="setting-row"><span><strong>Wallet signing</strong><small>The unlocked account key signs in this browser after your explicit action.</small></span><span className="status-pill">{walletName}</span></div><div className="setting-row"><span><strong>Local watchlist</strong><small>Saved in this browser; never sent to the API.</small></span><button className="text-button" onClick={() => { setWatchlist(DEFAULT_WATCHLIST); }}>Reset watchlist</button></div></section>}
           {view === "admin" && account.isAdmin && <AdminWalletPanel isLocalSimulator={account.isDemo} />}

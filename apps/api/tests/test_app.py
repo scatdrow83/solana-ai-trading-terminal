@@ -393,6 +393,45 @@ class FlaskApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json["error"], "mainnet_wallet_data_disabled_for_demo_account")
 
+    def test_public_wallet_portfolio_is_read_only_and_does_not_require_login(self):
+        rpc_calls = []
+
+        def rpc_fetcher(_url, method="GET", payload=None, headers=None):
+            rpc_calls.append(payload["method"])
+            if payload["method"] == "getBalance":
+                return {"result": {"value": 1_000_000_000}}
+            return {"result": {"value": []}}
+
+        with patch.dict(os.environ, {"APP_ENV": "staging-local"}):
+            app = create_app(
+                lambda _url: {"pairs": [sol_pair()]},
+                rpc_fetcher=rpc_fetcher,
+                database=MemoryDatabase(),
+            )
+        app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
+        response = app.test_client().get(f"/wallet/portfolio?address={SOL_MINT}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["walletAddress"], SOL_MINT)
+        self.assertEqual(rpc_calls, ["getBalance", "getTokenAccountsByOwner", "getTokenAccountsByOwner"])
+        self.assertNotIn("encryptedWallet", response.json)
+        self.assertNotIn("privateKey", response.json)
+
+    def test_public_wallet_portfolio_rejects_invalid_base58_length_before_rpc(self):
+        rpc_calls = []
+        with patch.dict(os.environ, {"APP_ENV": "staging-local"}):
+            app = create_app(
+                rpc_fetcher=lambda *_args, **_kwargs: rpc_calls.append(True),
+                database=MemoryDatabase(),
+            )
+        app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
+
+        response = app.test_client().get(f"/wallet/portfolio?address={'1' * 33}")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], "invalid_solana_wallet_address")
+        self.assertEqual(rpc_calls, [])
+
     def test_wallet_portfolio_caps_market_lookups_for_large_wallets(self):
         database = MemoryDatabase(authenticated=True)
         alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

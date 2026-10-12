@@ -703,6 +703,16 @@ body {
 .portfolio-panel .panel-heading p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
 .portfolio-panel .panel-heading code { color: #c7cfc1; font-family: var(--mono); font-size: 9px; overflow-wrap: anywhere; }
 .portfolio-actions { display: flex; align-items: center; gap: 10px; }
+.portfolio-lookup { display: flex; align-items: flex-end; gap: 9px; padding: 16px 0; border-bottom: 1px solid var(--border-subtle); }
+.portfolio-lookup label { display: flex; flex-direction: column; gap: 6px; color: #aab3a6; font-size: 9px; }
+.portfolio-lookup input { flex: 1; min-width: 120px; min-height: 36px; padding: 0 10px; border: 1px solid #303730; border-radius: 6px; background: #0b0e0c; color: var(--text); font-family: var(--mono); font-size: 9px; }
+.portfolio-lookup input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.language-selector { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9px; }
+.language-selector select { min-height: 30px; padding: 0 24px 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; }
+.language-selector select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.language-selector.is-compact { gap: 5px; }
+.language-selector.is-compact > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.account-card > .language-selector { justify-content: flex-end; margin-bottom: 18px; }
 .portfolio-summary { display: flex; align-items: center; gap: 28px; min-height: 90px; padding: 16px 12px; border-bottom: 1px solid var(--border-subtle); }
 .portfolio-summary > div { display: flex; flex-direction: column; gap: 5px; }
 .portfolio-summary span { color: var(--muted); font-size: 9px; }
@@ -1016,6 +1026,11 @@ body {
   .account-shell { padding: 12px; }
   .account-card { padding: 23px 19px; }
   .history-panel { padding: 13px; }
+  .portfolio-lookup { align-items: stretch; flex-direction: column; }
+  .portfolio-lookup input { min-height: 40px; }
+  .portfolio-summary { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .portfolio-summary .portfolio-subtotal { padding: 0; border: 0; }
+  .portfolio-summary .portfolio-truncated { margin: 0; }
   .admin-withdraw-form { grid-template-columns: 1fr; }
   .admin-withdraw-form .button { grid-column: 1; }
   .admin-recommendation-form { grid-template-columns: 1fr; }

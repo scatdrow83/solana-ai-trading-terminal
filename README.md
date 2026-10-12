@@ -387,6 +387,8 @@ uwierzytelnione ingestowanie nowych tokenów.
 - **Portfolio:** ekran pokazuje do 100 sald SOL i SPL/Token-2022 spośród maks.
   300 skanowanych tokenów. Ceny oraz USD są szacunkami DexScreener; przy
   aktywach bez wyceny lub przyciętym wyniku suma jest oznaczona jako częściowa.
+  Można podać dowolny publiczny adres Solana; endpoint analizy jest read-only,
+  ograniczony limitem zapytań i nie pobiera ani nie zwraca kluczy podpisujących.
   Nie jest to indeks historii transakcji ani PnL.
 - **Zlecenia:** rejestr swapów zapisuje status i podpis transakcji; automatyczne
   strategie oraz indeksowanie PnL nie są podłączone. Kokpit administratora

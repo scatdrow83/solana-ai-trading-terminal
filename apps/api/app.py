@@ -38,6 +38,7 @@ TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 MINT_PATTERN = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 ORDER_AMOUNT_PATTERN = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d{1,9})?$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 FEATURED_TOKENS = (
     SOL_MINT,
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -50,6 +51,17 @@ class MarketProviderError(Exception):
     def __init__(self, message: str, status_code: int = 503) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def is_solana_public_key(value: Any) -> bool:
+    if not isinstance(value, str) or not MINT_PATTERN.fullmatch(value):
+        return False
+    decoded = 0
+    for character in value:
+        decoded = decoded * 58 + BASE58_ALPHABET.index(character)
+    leading_zeroes = len(value) - len(value.lstrip("1"))
+    decoded_length = (decoded.bit_length() + 7) // 8
+    return leading_zeroes + decoded_length == 32
 
 
 class PostgresDatabase:
@@ -818,13 +830,17 @@ def create_app(
     @app.get("/wallet/portfolio")
     @limiter.limit("30 per minute")
     def wallet_portfolio():
-        account, failure = account_required()
-        if failure:
-            return failure
-        if account["is_demo"]:
-            return jsonify({"error": "mainnet_wallet_data_disabled_for_demo_account"}), 403
+        wallet_address = request.args.get("address")
+        if wallet_address is None:
+            account, failure = account_required()
+            if failure:
+                return failure
+            if account["is_demo"]:
+                return jsonify({"error": "mainnet_wallet_data_disabled_for_demo_account"}), 403
+            wallet_address = account["wallet_address"]
+        elif not is_solana_public_key(wallet_address):
+            return jsonify({"error": "invalid_solana_wallet_address"}), 400
 
-        wallet_address = account["wallet_address"]
         balance_result = rpc_fetcher(
             rpc_url,
             "POST",
