@@ -80,6 +80,8 @@ specjalne hasła zgodnie z URL encoding. Połączenie właściciela projektu
 pozostaw wyłącznie dla Supabase CLI i migracji:
 
 ```bash
+openssl rand -hex 32
+openssl rand -hex 32
 supabase login
 supabase link --project-ref TWOJ_STAGING_PROJECT_REF
 supabase db push --linked
@@ -89,12 +91,19 @@ docker compose --env-file .env.staging -f docker-compose.staging.yml up --build 
 Na serwerze domena DNS musi wskazywać na publiczny adres IP, a porty TCP 80/443
 (oraz opcjonalnie UDP 443) muszą być dostępne dla Caddy. API i worker nie mają
 portów hosta; publiczny ruch HTTP jest kierowany przez Caddy wyłącznie do web.
+Wstaw dwa wygenerowane sekrety do `APP_SECRET_KEY` i `REDIS_PASSWORD` w `.env.staging`.
+
+Staging i produkcja używają wewnętrznego Redis z uwierzytelnieniem jako
+magazynu limitów: auth `20 POST/min/IP`, rynek `120 req/min/IP`, order/execute
+`10 POST/min/IP`. API pobiera IP klienta z nagłówka przekazywanego przez Caddy
+i same-origin proxy Next.
 
 ### Produkcja
 
 Utwórz oddzielny produkcyjny projekt Supabase (backup/PITR włączony) i osobną
 rolę runtime `terminal_app` powyższym poleceniem SQL. Ustaw jej unikalne hasło,
-osobny sekret `APP_SECRET_KEY`, produkcyjny klucz Jupiter i RPC. Skopiuj
+osobny sekret `APP_SECRET_KEY` i `REDIS_PASSWORD` (oba generowane przez
+`openssl rand -hex 32`), produkcyjny klucz Jupiter i RPC. Skopiuj
 `.env.production.example` do `.env.production`, wstaw sekrety oraz domenę
 produkcyjną. Uruchom migracje na projekcie produkcyjnym i dopiero potem usługi:
 

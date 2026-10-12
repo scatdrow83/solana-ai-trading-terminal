@@ -41,13 +41,15 @@ nie odczytuje `encrypted_secret`. Wyłącz tę funkcję ustawiając
 
 - Nie commituj sekretów. `APP_SECRET_KEY`, hasło bazy Supabase i
   `JUPITER_API_KEY` muszą mieć unikalne, silne wartości dla każdego środowiska.
+- Staging/production wymagają osobnego 64-znakowego hex `REDIS_PASSWORD`;
+  Redis jest prywatnym magazynem limitów auth/market/trade bez portu hosta.
 - `SESSION_COOKIE_SECURE=false` jest wyłącznie dla lokalnego HTTP. Używaj `true`
   w staging/production za reverse proxy Caddy z automatycznym HTTPS.
 - `docker-compose.yml` jest wariantem wyłącznie localhost. Zdalne warianty nie
   wystawiają API ani workera na hosta; publiczny web jest dostępny przez Caddy.
-- Przed publicznym wdrożeniem dodaj rate limiting i ochronę brute-force,
-  przeprowadź przegląd bezpieczeństwa, testy obciążeniowe i test odtwarzania
-  kopii zapasowej.
+- API ogranicza auth, market i trade per IP przez Redis. Przed publicznym
+  wdrożeniem nadal przeprowadź niezależny przegląd bezpieczeństwa, testy
+  obciążeniowe i test odtwarzania kopii zapasowej.
 - PostgreSQL używa wolumenu `postgres_data`; `docker compose down -v` usuwa
   bazę i historię kont.
 - Klucz Jupiter pozostaje w kontenerze API i nie może być publikowany w

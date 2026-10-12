@@ -10,6 +10,7 @@ apps/web -> apps/api (Python/Flask REST API) -> PostgreSQL
                          `-> Jupiter Swap API v2 (/order, /execute)
 
 apps/worker (osobny proces, obecnie tylko healthcheck)
+Redis (zdalne profile; współdzielony magazyn rate limitów, bez portu hosta)
 packages/shared
 packages/risk-engine (reguły deterministyczne, bez wysyłania transakcji)
 ```
@@ -37,6 +38,9 @@ Werkzeug, a klucze walletów szyfrowane w przeglądarce.
 - Logowanie weryfikuje hash hasła i zwraca zaszyfrowany keypair. Odszyfrowanie
   oraz porównanie adresu publicznego odbywa się w przeglądarce.
 - Flask signed session identyfikuje konto. Proxy Next.js przekazuje cookie do API.
+- Staging/production wymagają Redis dla współdzielonych limitów: auth 20 POST,
+  market 120 żądań, trade order/execute 10 POST na minutę/IP. Caddy ustala
+  `X-Forwarded-For`; Next przekazuje je do API, a `ProxyFix` ufa jednemu proxy.
 - Konto lokalnego demo ma flagę `is_demo`; endpointy tworzenia i wykonywania
   swapów zwracają `403` niezależnie od konfiguracji Jupiter. Hasło demonstracyjne
   jest wyłącznie do lokalnych testów UI; tego portfela nie należy zasilać.
@@ -74,7 +78,7 @@ samodzielnie swapa bez akcji użytkownika.
 - Lokalny API inicjalizuje `apps/api/schema.sql` przy starcie. Staging i
   produkcja używają wersjonowanej migracji `supabase/migrations/*terminal_runtime.sql`;
   migrację należy wykonać przed uruchomieniem API.
-- Nie ma rate limiting logowania, indeksowania sald, PnL ani automatycznych
+- Nie ma MFA, potwierdzenia email, indeksowania sald, PnL ani automatycznych
   strategii. Przed publicznym wdrożeniem przeprowadź niezależny przegląd
   bezpieczeństwa, testy obciążeniowe i procedurę odtworzenia backupu.
 - DexScreener jest dostawcą danych rynkowych; ceny i output kwotowania nie są

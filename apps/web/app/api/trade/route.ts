@@ -3,10 +3,19 @@ import { NextResponse } from "next/server";
 const apiUrl = () => process.env.API_INTERNAL_URL ?? "http://localhost:4000";
 const noStoreHeaders = { "Cache-Control": "no-store" };
 
-async function proxyTrade(path: string, init?: RequestInit) {
+async function proxyTrade(
+  path: string,
+  init?: RequestInit,
+  forwardedFor?: string | null
+) {
   try {
+    const headers = new Headers(init?.headers);
+    if (forwardedFor) {
+      headers.set("X-Forwarded-For", forwardedFor);
+    }
     const response = await fetch(`${apiUrl()}${path}`, {
       ...init,
+      headers,
       cache: "no-store",
       signal: AbortSignal.timeout(15_000)
     });
@@ -31,7 +40,7 @@ export async function GET(request: Request) {
     return proxyTrade("/trade/history", {
       method: "GET",
       headers: cookie ? { Cookie: cookie } : {}
-    });
+    }, request.headers.get("x-forwarded-for"));
   }
   if (resource !== "status") {
     return NextResponse.json(
@@ -69,5 +78,5 @@ export async function POST(request: Request) {
       ...(cookie ? { Cookie: cookie } : {})
     },
     body: JSON.stringify(payload)
-  });
+  }, request.headers.get("x-forwarded-for"));
 }

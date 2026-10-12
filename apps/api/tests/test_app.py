@@ -160,6 +160,16 @@ class FlaskApiTests(unittest.TestCase):
         self.assertEqual(response.json["mode"], "live")
         self.assertEqual(response.json["integrations"]["swap"], "not_configured")
 
+    def test_auth_requests_return_json_when_rate_limited(self):
+        for _ in range(20):
+            self.assertNotEqual(
+                self.client.post("/auth", json={}).status_code,
+                429,
+            )
+        response = self.client.post("/auth", json={})
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json, {"error": "rate_limit_exceeded"})
+
     def test_production_requires_secure_supabase_database_configuration(self):
         production_environment = {
             "APP_ENV": "production",
@@ -172,6 +182,7 @@ class FlaskApiTests(unittest.TestCase):
             "TRADING_MODE": "live",
             "LIVE_TRADING_ENABLED": "true",
             "JUPITER_API_KEY": "configured-production-key",
+            "RATELIMIT_STORAGE_URI": f"redis://:{'1' * 64}@redis:6379/0",
         }
         with patch.dict(os.environ, production_environment, clear=True):
             app = create_app(lambda _url: {"pairs": [sol_pair()]})
@@ -195,6 +206,11 @@ class FlaskApiTests(unittest.TestCase):
             ({"DATABASE_INITIALIZE": "true"}, "versioned migrations"),
             ({"LOCAL_SECURITY_SIMULATOR": "true"}, "must be disabled"),
             ({"JUPITER_API_KEY": ""}, "production JUPITER_API_KEY"),
+            ({"RATELIMIT_STORAGE_URI": "memory://"}, "rate limits must use the Redis"),
+            (
+                {"RATELIMIT_STORAGE_URI": "redis://:replace-with-64-random-hex-characters@redis:6379/0"},
+                "64 hexadecimal characters",
+            ),
         ):
             invalid_environment = {**production_environment, **overrides}
             with self.subTest(expected_error=expected_error), patch.dict(

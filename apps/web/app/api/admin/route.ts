@@ -12,6 +12,9 @@ async function proxyAdmin(request: Request, body?: string) {
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...(request.headers.get("cookie")
             ? { Cookie: request.headers.get("cookie")! }
+            : {}),
+          ...(request.headers.get("x-forwarded-for")
+            ? { "X-Forwarded-For": request.headers.get("x-forwarded-for")! }
             : {})
         },
         ...(body ? { body } : {}),

@@ -52,7 +52,13 @@ export async function GET(request: Request) {
   try {
     const response = await fetch(
       `${apiUrl}${endpoint}`,
-      { cache: "no-store", signal: AbortSignal.timeout(9000) }
+      {
+        headers: request.headers.get("x-forwarded-for")
+          ? { "X-Forwarded-For": request.headers.get("x-forwarded-for")! }
+          : {},
+        cache: "no-store",
+        signal: AbortSignal.timeout(9000)
+      }
     );
     const body: unknown = await response.json();
 

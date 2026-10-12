@@ -13,6 +13,7 @@ services:
       DATABASE_INITIALIZE: "false"
       SESSION_COOKIE_SECURE: "true"
       LOCAL_SECURITY_SIMULATOR: "false"
+      RATELIMIT_STORAGE_URI: redis://:${REDIS_PASSWORD:?Generate REDIS_PASSWORD with openssl rand -hex 32}@redis:6379/0
       TRADING_MODE: live
       LIVE_TRADING_ENABLED: "true"
       JUPITER_API_KEY: ${JUPITER_API_KEY:?Set the production Jupiter API key}
@@ -31,6 +32,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   web:
@@ -81,6 +85,29 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Generate REDIS_PASSWORD with openssl rand -hex 32}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?Generate REDIS_PASSWORD with openssl rand -hex 32}
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   proxy:
     image: caddy:2-alpine
     environment:
@@ -107,3 +134,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  redis_data:

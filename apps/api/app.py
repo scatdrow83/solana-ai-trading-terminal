@@ -507,6 +507,9 @@ def create_app(
             raise RuntimeError("A production JUPITER_API_KEY is required for live trading")
         if not rate_limit_storage.startswith("redis://"):
             raise RuntimeError("Staging and production rate limits must use the Redis service")
+        redis_password = urllib.parse.urlsplit(rate_limit_storage).password or ""
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", redis_password):
+            raise RuntimeError("Redis rate-limit password must be 64 hexadecimal characters")
     if trading_mode != "live" or live_trading_enabled != "true":
         raise RuntimeError(
             "This application only supports live Solana Mainnet mode; "
