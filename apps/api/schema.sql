@@ -2,12 +2,16 @@ CREATE TABLE IF NOT EXISTS app_users (
     id UUID PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    is_admin BOOLEAN NOT NULL DEFAULT false,
     is_demo BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE app_users
     ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE app_users
+    ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS wallets (
     user_id UUID PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
@@ -57,3 +61,39 @@ CREATE TABLE IF NOT EXISTS swap_trades (
 
 CREATE INDEX IF NOT EXISTS swap_trades_user_created_idx
     ON swap_trades (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS discovered_tokens (
+    mint_address TEXT PRIMARY KEY
+        CHECK (mint_address ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'),
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    price_usd DOUBLE PRECISION,
+    liquidity_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    volume_24h_usd DOUBLE PRECISION,
+    price_change_24h DOUBLE PRECISION,
+    market_cap_usd DOUBLE PRECISION,
+    fdv_usd DOUBLE PRECISION,
+    pair_address TEXT NOT NULL,
+    dex_id TEXT NOT NULL,
+    url TEXT,
+    logo_uri TEXT,
+    source TEXT NOT NULL,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE discovered_tokens
+    ADD COLUMN IF NOT EXISTS logo_uri TEXT;
+
+CREATE INDEX IF NOT EXISTS discovered_tokens_first_seen_idx
+    ON discovered_tokens (first_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS token_recommendations (
+    mint_address TEXT PRIMARY KEY REFERENCES discovered_tokens(mint_address) ON DELETE CASCADE,
+    admin_user_id UUID NOT NULL REFERENCES app_users(id),
+    note TEXT NOT NULL CHECK (char_length(note) BETWEEN 10 AND 300),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS token_recommendations_created_idx
+    ON token_recommendations (created_at DESC);

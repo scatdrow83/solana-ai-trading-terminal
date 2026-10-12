@@ -16,11 +16,12 @@ wysłaniem do API. Jawny klucz pozostaje w pamięci przeglądarki po odblokowani
 | --- | --- | --- |
 | Web | `Partial` | Dashboard, rynki, watchlista, rejestracja/logowanie i lokalne podpisywanie swapów |
 | API | `Partial` | Flask REST API: notowania, auth, portfele, historia swapów i proxy Jupiter v2 |
-| Worker | `Partial` | Proces z liveness; brak kolejki i zadań |
+| Worker | `Active` | Cykliczne wykrywanie tokenów Solana z feedów DexScreener profiles/boosts i zapis nowych aktywnych rynków |
 | PostgreSQL / Supabase | `Configurable` | Lokalny PostgreSQL albo odrębna baza Supabase dla stagingu i produkcji |
 | Risk engine | `Partial` | Deterministyczne kontrole, bez wykonywania zleceń |
 | Jupiter Swap v2 / Solana RPC | `Configurable` | Klucz Jupiter i endpoint RPC konfigurowane w `.env` |
-| Wallet Desk | `Partial` | Portfel konta odblokowywany hasłem; saldo tokenów nie jest indeksowane |
+| Wallet Desk | `Partial` | Portfel konta odblokowywany hasłem; kokpit admina odczytuje rzeczywiste salda SOL |
+| Admin console | `Configurable` | Lista adminów z `ADMIN_EMAILS`; monitoring tylko do odczytu, operacje on-chain wymagają podpisu Phantom |
 | Live trading | `Live Mainnet` | Kupno/sprzedaż przez Jupiter; jawne kliknięcie podpisuje i wysyła swap |
 | Redis/BullMQ | `Planned` | Celowo pominięte, dopóki worker nie wymaga kolejki |
 
@@ -47,6 +48,58 @@ demo admina i jego symulator są lokalne i nie mogą wykonać swapu Mainnet.
 Nie udostępniaj wariantu lokalnego publicznie. W stagingu i produkcji wszystkie
 swapowe transakcje są prawdziwymi transakcjami Mainnet wymagającymi podpisu
 użytkownika w przeglądarce.
+
+Worker co 30 sekund sprawdza najnowsze profile i podbicia tokenów Solana w
+DexScreener, pobiera zagregowane pary dla znalezionych mintów i zapisuje
+wykryte rynki w PostgreSQL. Widok **New tokens** pokazuje rekordy oraz pierwszy czas
+wykrycia przez tę instancję. Okres można ustawić przez
+`MARKET_DISCOVERY_INTERVAL_MS` (15–300 sekund). Feed jest agregatorem, a nie
+kompletnym indeksem blockchaina: token pojawi się po wykryciu go przez
+DexScreener, bez gwarancji indeksowania każdej nowej puli natychmiast po
+utworzeniu. Funkcja wyłącznie odkrywa i prezentuje rynki — nie ocenia ich
+bezpieczeństwa ani nie inicjuje transakcji.
+Administrator lokalny lub konto z allowlisty `ADMIN_EMAILS` może w panelu
+administracyjnym dodać istniejący,
+aktywny mint Solana do sekcji **New tokens** wraz z krótką notatką rynkową.
+API sprawdza, czy DexScreener zwraca dla mintu rynek Solana; użytkownicy muszą
+być zalogowani, żeby zobaczyć rekomendacje. To nie tworzy tokena SPL, nie
+inicjuje zakupu ani nie przenosi środków. Notatka administratora nie jest poradą
+inwestycyjną. Funkcje lokalnego symulatora są dostępne tylko dla konta demo,
+gdy `LOCAL_SECURITY_SIMULATOR=true`; na stagingu i produkcji panel admina jest
+dostępny wyłącznie dla dokładnych adresów email z `ADMIN_EMAILS`.
+Konto administratora musi zostać utworzone po ustawieniu allowlisty i wymaga
+dodatkowo poprawnego `ADMIN_BOOTSTRAP_TOKEN` podczas rejestracji. Rola jest
+zapisywana w bazie przy rejestracji; samo dopisanie istniejącego konta do
+allowlisty nie nada mu uprawnień. Token generuj i przekazuj poza aplikacją
+(np. bezpiecznym menedżerem sekretów), nie zapisuj go w repozytorium ani czacie.
+
+W wariantach Supabase zastosuj migracje w kolejności:
+`20261012020000_solana_token_discovery.sql`,
+`20261012030000_admin_token_recommendations.sql`,
+`20261012040000_admin_roles.sql`.
+Kokpit admina zawiera również **Token Studio**: tworzenie klasycznych,
+fungible SPL tokenów z kontem mint, kontem ATA administratora i metadanymi
+Metaplex Token Metadata V3, mintowanie dodatkowej podaży, edycję metadanych oraz
+nieodwracalne odebranie mint/freeze authority lub ustawienie metadanych jako
+immutable. Podpisy odbywają się przez rozszerzenie Phantom po stronie
+przeglądarki; klucz prywatny nie jest wysyłany do API. Używaj dedykowanego
+portfela administratora z małym saldem na opłaty, nie portfela demo.
+
+Przed utworzeniem tokena administrator musi osobno opublikować plik JSON
+Metaplex z metadanymi/obrazem w HTTPS lub IPFS i podać jego URI. Aplikacja nie
+hostuje plików, nie dodaje płynności, nie rozsyła tokenów do kont użytkowników,
+nie tworzy rozszerzeń Token-2022/NFT i nie gwarantuje indeksacji przez DEX.
+Lista utworzonych tokenów jest lokalna dla przeglądarki. Każda operacja wymaga
+osobnej zgody Phantom; transakcje są nieodwracalne i pobierają prawdziwe opłaty
+Mainnet.
+W produkcji kokpit portfeli odczytuje rzeczywiste salda SOL z RPC w porcjach po
+100 kont; nie pokazuje fikcyjnych sald ani kluczy prywatnych. Administrator nie
+może wypłacać środków z portfeli użytkowników — każdy transfer wymaga podpisu
+właściciela portfela. Panel produkcyjny i rekomendacje są dostępne wyłącznie
+dla dokładnych adresów email skonfigurowanych w `ADMIN_EMAILS`.
+Ikony rynków pochodzą ze zweryfikowanych metadanych DexScreener; dla znanych
+aktywów używane są zaufane mapowania, a brakujące loga kończą się neutralnym
+placeholderem zamiast błędnie przypisanej ikony tokena kwotowanego.
 
 ## Warianty wdrożenia
 
@@ -82,6 +135,7 @@ pozostaw wyłącznie dla Supabase CLI i migracji:
 ```bash
 openssl rand -hex 32
 openssl rand -hex 32
+openssl rand -hex 32
 supabase login
 supabase link --project-ref TWOJ_STAGING_PROJECT_REF
 supabase db push --linked
@@ -91,7 +145,15 @@ docker compose --env-file .env.staging -f docker-compose.staging.yml up --build 
 Na serwerze domena DNS musi wskazywać na publiczny adres IP, a porty TCP 80/443
 (oraz opcjonalnie UDP 443) muszą być dostępne dla Caddy. API i worker nie mają
 portów hosta; publiczny ruch HTTP jest kierowany przez Caddy wyłącznie do web.
-Wstaw dwa wygenerowane sekrety do `APP_SECRET_KEY` i `REDIS_PASSWORD` w `.env.staging`.
+Wstaw wygenerowane sekrety do `APP_SECRET_KEY`, `REDIS_PASSWORD` i
+`MARKET_DISCOVERY_TOKEN` w `.env.staging`. Ustaw też `ADMIN_EMAILS` jako
+rozdzieloną przecinkami listę dokładnych, zaufanych adresów administratorów.
+Konto musi najpierw zarejestrować się z takim adresem; rola admina wynika z
+serwerowej allowlisty, a nie z danych klienta. Ustaw unikalny
+`ADMIN_BOOTSTRAP_TOKEN` poleceniem `openssl rand -hex 32` i przekaż go tylko
+administratorowi przy rejestracji. Token discovery musi być unikalnym,
+64-znakowym ciągiem hex wygenerowanym np. przez `openssl rand -hex 32`; API
+wymaga go od workera przy zapisie odkryć.
 
 Staging i produkcja używają wewnętrznego Redis z uwierzytelnieniem jako
 magazynu limitów: auth `20 POST/min/IP`, rynek `120 req/min/IP`, order/execute
@@ -102,8 +164,8 @@ i same-origin proxy Next.
 
 Utwórz oddzielny produkcyjny projekt Supabase (backup/PITR włączony) i osobną
 rolę runtime `terminal_app` powyższym poleceniem SQL. Ustaw jej unikalne hasło,
-osobny sekret `APP_SECRET_KEY` i `REDIS_PASSWORD` (oba generowane przez
-`openssl rand -hex 32`), produkcyjny klucz Jupiter i RPC. Skopiuj
+osobne sekrety `APP_SECRET_KEY`, `REDIS_PASSWORD` i `MARKET_DISCOVERY_TOKEN`
+(generowane przez `openssl rand -hex 32`), produkcyjny klucz Jupiter i RPC. Skopiuj
 `.env.production.example` do `.env.production`, wstaw sekrety oraz domenę
 produkcyjną. Uruchom migracje na projekcie produkcyjnym i dopiero potem usługi:
 
@@ -121,6 +183,10 @@ przez pozostałe migracje Supabase. Konto aplikacji ma dostęp DML tylko do tego
 schematu, a migracje uruchamiaj osobno kontem właściciela. `supabase db push`
 musi zakończyć się przed wdrożeniem nowego API. Utrzymuj kopie zapasowe Supabase
 i testuj ich odtwarzanie.
+Ustaw `ADMIN_EMAILS` w `.env.production` na dokładne adresy zaufanych
+administratorów. Dla tych kont pojawi się kokpit: odczyt sald SOL, rekomendacje
+tokenów i Token Studio. Ustaw też odrębny `ADMIN_BOOTSTRAP_TOKEN` i przekazuj
+go administratorom poza aplikacją. Admin nie może podpisać wypłaty z portfela użytkownika.
 
 Supabase jest tutaj zarządzanym PostgreSQL. Rejestracja i sesje aplikacji nadal
 korzystają z istniejącego Flask auth oraz tabel `terminal.app_users` i
@@ -133,10 +199,11 @@ PostgreSQL przez TLS (`sslmode=require`).
 ```text
 apps/web (Next.js / React; account wallet generated and encrypted in browser)
     -> apps/api (Flask REST API) -> PostgreSQL
-apps/api -> DexScreener (notowania)
+apps/api -> DexScreener (notowania i zagregowane pary)
 apps/api -> Jupiter Swap API v2 (kwotowanie i wykonanie podpisanych swapów)
 apps/api -> Solana Mainnet RPC (decimals tokenu)
-apps/worker (oddzielny proces; zadania jeszcze nieaktywne)
+apps/worker -> DexScreener (najnowsze profile/podbicia co 30 s)
+apps/worker -> apps/api -> PostgreSQL (autoryzowany zapis wykrytych rynków)
 packages/shared
 packages/risk-engine
 ```
@@ -144,6 +211,9 @@ packages/risk-engine
 Szczegóły: [docs/architecture.md](./docs/architecture.md). Publiczny feed
 DexScreener nie wymaga klucza. Lokalny Compose uruchamia PostgreSQL; warianty
 staging/prod używają PostgreSQL zarządzanego przez odpowiedni projekt Supabase.
+Tokeny w widoku **New tokens** są kandydatami do późniejszej analizy, nie
+rekomendacją ani oceną bezpieczeństwa. Nie ma jeszcze modelu AI, automatycznego
+kupna ani indeksowania wszystkich zdarzeń on-chain.
 
 ## Struktura
 
@@ -186,13 +256,15 @@ cp .env.example .env
 docker compose -f docker-compose.yml up --build -d --wait
 ```
 
-Lokalne konto podglądowe i simulator admina (tylko na tym stagingu):
+Lokalne konto demo i symulator admina (tylko na staging-local):
 
 - email/login: `admin@local.test`
 - hasło: `admin`
 
-Konto jest oznaczone jako demo. W zakładce `Admin simulator` można przeglądać
-adresy publiczne i przećwiczyć wypłatę na fikcyjnym saldzie 10 SOL na portfel.
+Przy pierwszym uruchomieniu konto trzeba utworzyć z formularza rejestracji
+(dane `admin@local.test` / `admin` są wypełnione automatycznie). Konto jest
+oznaczone jako demo. W zakładce `Admin simulator` można przeglądać adresy
+publiczne i przećwiczyć wypłatę na fikcyjnym saldzie 10 SOL na portfel.
 Symulacja zmienia wyłącznie lokalny testowy ledger i dziennik; nigdy nie wysyła
 transakcji ani nie zwraca zaszyfrowanych kluczy. API blokuje dla kont demo swapy
 Mainnet, nawet gdy klucz Jupiter jest skonfigurowany. **To słabe hasło jest
@@ -200,8 +272,8 @@ wyłącznie do lokalnych testów. Nie używaj ani nie zasilaj portfela demo.**
 Simulator jest włączony w Compose, tylko gdy `LOCAL_SECURITY_SIMULATOR=true`;
 nie wystawiaj tego stagingu do publicznej sieci.
 
-Rejestracja jest dostępna pod <http://localhost:3000>. Utwórz konto, skopiuj
-pokazany plik JSON klucza Solana do bezpiecznego offline backupu i potwierdź,
+Rejestracja zwykłych kont jest dostępna pod <http://localhost:3000>. Utwórz
+konto, skopiuj pokazany plik JSON klucza Solana do bezpiecznego offline backupu i potwierdź,
 że został zapisany. Hasło konta szyfruje klucz w przeglądarce; nie ma odzyskiwania
 klucza przez reset hasła. Swapy są prawdziwymi transakcjami Mainnet i wymagają
 skonfigurowanego klucza Jupiter oraz SOL/tokenu na przypisanym portfelu. Dla bezpiecznej wartości
@@ -249,8 +321,10 @@ Adresy lokalne:
 
 Terminal pokazuje notowania SOL, USDC, JUP i RAY, wyszukiwanie tokenów, wykres
 sesyjnych obserwacji cenowych, watchlistę zapisywaną w przeglądarce i szczegóły
-pary oraz swapy Mainnet. Odświeżanie można ustawić na 15, 30 lub 60 sekund. API udostępnia
+pary, widok nowych listingów oraz swapy Mainnet. Odświeżanie można ustawić na
+15, 30 lub 60 sekund. API udostępnia
 `GET /health`, `GET /market/overview`, `GET /market/search?q=SOL`,
+`GET /market/new`,
 `GET /market/tokens/<mintAddress>` oraz wsadowe
 `GET /market/tokens?addresses=<mint1>,<mint2>`, `GET /trade/status`,
 `POST /trade/order` i `POST /trade/execute`. Prywatne endpointy kont i swapów
@@ -290,31 +364,42 @@ python3 -m unittest discover -s apps/api/tests
 ```
 
 Testy silnika ryzyka sprawdzają limity i błędne dane. Testy API weryfikują
-walidację zleceń Mainnet, limit kupna, decimals tokenu, jednokrotne wykonanie
-oraz blokadę handlu bez klucza Jupiter.
+walidację zleceń Mainnet, limit kupna, decimals tokenu, jednokrotne wykonanie,
+blokadę handlu bez klucza Jupiter, read-only salda SOL/tokenów SPL oraz
+uwierzytelnione ingestowanie nowych tokenów.
 
 ## Integracje i ograniczenia
 
 - **DexScreener:** publiczne notowania read-only, bez klucza. To dane zewnętrzne;
-  sprawdzaj źródło i czas aktualizacji.
+  worker odpytuje feedy profili/podbitych tokenów Solana i pobiera zagregowane
+  pary z DEX-ów indeksowanych przez DexScreener. Feed nie jest pełnym indeksem
+  on-chain i nie gwarantuje natychmiastowego wykrycia wszystkich pul.
 - **Jupiter Swap API v2:** serwerowe `/order` i `/execute`; wymaga klucza API
   i jawnej akcji podpisu w przeglądarce.
-- **Solana RPC:** pobiera decimals tokenu z Mainnet; `SOLANA_RPC_URL` pozwala
-  skonfigurować własnego dostawcę.
-- **Token Radar/AI:** brak providerów; konfiguracja bez klucza ma jawny status
-  `provider_not_configured`.
+- **Solana RPC:** pobiera decimals przy budowie zlecenia i potwierdzone salda
+  natywnego SOL oraz SPL/Token-2022 dla zalogowanego użytkownika;
+  `SOLANA_RPC_URL` pozwala skonfigurować własnego dostawcę. Demo admin nie
+  odpytuje Mainnet.
+- **AI/scoring tokenów:** niezaimplementowane; nowe wpisy nie są oceną
+  bezpieczeństwa ani rekomendacją kupna.
 - **Konta/portfele:** hasło konta i zaszyfrowany klucz są przechowywane osobno;
   odszyfrowanie oraz podpis transakcji odbywają się w przeglądarce.
+- **Portfolio:** ekran pokazuje do 100 sald SOL i SPL/Token-2022 spośród maks.
+  300 skanowanych tokenów. Ceny oraz USD są szacunkami DexScreener; przy
+  aktywach bez wyceny lub przyciętym wyniku suma jest oznaczona jako częściowa.
+  Nie jest to indeks historii transakcji ani PnL.
 - **Zlecenia:** rejestr swapów zapisuje status i podpis transakcji; automatyczne
-  strategie, saldo portfela i indeksowanie PnL nie są podłączone.
+  strategie oraz indeksowanie PnL nie są podłączone. Kokpit administratora
+  pokazuje wyłącznie natywne saldo SOL i nie umożliwia wypłat z portfeli
+  użytkowników.
 - **PnL:** niezaimplementowane; nie powstają losowe wyceny ani wykresy.
 
-## Następne etapy
+## Przed wdrożeniem produkcyjnym
 
-1. Walidacja lokalnego toolchainu oraz uruchomienie lint/typecheck/test.
-2. Rate limiting logowania i egzekwowanie limitów prób auth.
-3. Adaptery tylko do odczytu dla Solana RPC i dostawcy danych zewnętrznych.
-4. Zapis rzeczywistych, oznaczonych czasem snapshotów i transakcji Mainnet.
-5. Przed publicznym wdrożeniem dodaj rate limiting i brute-force protection,
-   migruj inicjalizację DB na wersjonowane migracje i przeprowadź przegląd
-   bezpieczeństwa; obecny staging jest ograniczony do localhost.
+Staging i produkcja wymagają prawdziwego Supabase, RPC dostawcy z limitami
+odpowiednimi do ruchu, klucza Jupiter, domeny/DNS i sekretów z menedżera
+sekretów. Nie da się ich bezpiecznie ustawić z repozytorium; przykładowe
+wartości `.env.*.example` nie uruchamiają wdrożenia. Uruchom najpierw osobny
+staging, wykonaj testy portfela i transakcji na małych kwotach, skonfiguruj
+monitoring/alerty oraz rate limiting i dopiero po ręcznym przeglądzie publikuj
+adres produkcyjny. Nie wykonuj testów transakcyjnych na środkach użytkowników.

@@ -111,7 +111,9 @@ async function postAuth(payload) {
 export default function AccountGate({ onUnlocked }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [adminBootstrapToken, setAdminBootstrapToken] = useState("");
   const [account, setAccount] = useState(null);
+  const [demoAvailable, setDemoAvailable] = useState(false);
   const [mode, setMode] = useState("register");
   const [newKeypair, setNewKeypair] = useState(null);
   const [savedKey, setSavedKey] = useState(false);
@@ -126,6 +128,11 @@ export default function AccountGate({ onUnlocked }) {
       .then(async (response) => {
         const body = await response.json();
         if (!response.ok) throw new Error(body.error ?? "account API unavailable");
+        if (!cancelled && body.demoAvailable === true) {
+          setDemoAvailable(true);
+          setEmail("admin@local.test");
+          setPassword("admin");
+        }
         if (!cancelled && body.authenticated) {
           setAccount(body.account);
           setEmail(body.account.email);
@@ -152,7 +159,11 @@ export default function AccountGate({ onUnlocked }) {
 
   const generateWallet = () => {
     setError(null);
-    if (password.length < 12) {
+    const isDemoSignup =
+      demoAvailable &&
+      email.trim().toLowerCase() === "admin@local.test" &&
+      password === "admin";
+    if (password.length < 12 && !isDemoSignup) {
       setError("Use an account password with at least 12 characters.");
       return;
     }
@@ -181,7 +192,11 @@ export default function AccountGate({ onUnlocked }) {
   const submitRegister = async (event) => {
     event.preventDefault();
     setError(null);
-    if (!newKeypair || !savedKey) {
+    const isDemoSignup =
+      demoAvailable &&
+      email.trim().toLowerCase() === "admin@local.test" &&
+      password === "admin";
+    if (!newKeypair || (!isDemoSignup && !savedKey)) {
       setError("Create the wallet and confirm you have safely backed up its secret key.");
       return;
     }
@@ -193,10 +208,12 @@ export default function AccountGate({ onUnlocked }) {
         email,
         password,
         walletAddress: newKeypair.publicKey.toBase58(),
-        encryptedWallet
+        encryptedWallet,
+        adminBootstrapToken
       });
       setAccount(response.account);
       setPassword("");
+      setAdminBootstrapToken("");
       onUnlocked(response.account, newKeypair);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Account creation failed.");
@@ -248,6 +265,11 @@ export default function AccountGate({ onUnlocked }) {
     if (nextMode === "register") setAccount(null);
   };
 
+  const isDemoSignup =
+    demoAvailable &&
+    email.trim().toLowerCase() === "admin@local.test" &&
+    password === "admin";
+
   if (loading) {
     return <main className="account-shell"><div className="account-card"><span className="eyebrow">SOLANA MAINNET</span><h1>Loading your account…</h1></div></main>;
   }
@@ -276,24 +298,34 @@ export default function AccountGate({ onUnlocked }) {
             <label htmlFor="account-email">Email</label>
             <input id="account-email" type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required />
             <label htmlFor="account-password">Account password</label>
-            <input id="account-password" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
-            <small>At least 12 characters. This password encrypts your wallet key in your browser.</small>
-            <button className="button button-primary" type="submit">Generate my Solana wallet</button>
+            <input id="account-password" type="password" autoComplete="new-password" minLength={demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? 5 : 12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <small>{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? "Local demo credentials only: admin / admin. Never fund the demo wallet." : "At least 12 characters. This password encrypts your wallet key in your browser."}</small>
+            <button className="button button-primary" type="submit">{demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? "Generate local demo wallet" : "Generate my Solana wallet"}</button>
           </form>
         ) : mode === "register" ? (
           <form className="account-form" onSubmit={(event) => void submitRegister(event)}>
             <label htmlFor="account-email">Email</label>
             <input id="account-email" type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required />
             <label htmlFor="account-password">Account password</label>
-            <input id="account-password" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
-            <div className="wallet-backup-panel">
+            <input id="account-password" type="password" autoComplete="new-password" minLength={demoAvailable && email.trim().toLowerCase() === "admin@local.test" ? 5 : 12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required />
+            {!isDemoSignup && <>
+              <label htmlFor="admin-bootstrap-token">Admin bootstrap token <span>(administrator accounts only)</span></label>
+              <input id="admin-bootstrap-token" type="password" autoComplete="off" maxLength={64} value={adminBootstrapToken} onChange={(event) => setAdminBootstrapToken(event.target.value)} />
+              <small>Only enter this if an operator explicitly provisioned your email as an administrator.</small>
+            </>}
+            {isDemoSignup ? (
+              <div className="demo-account-notice" role="note">
+                <strong>Local demo only · never fund this wallet</strong>
+                <small>This account has no funds, cannot place Mainnet swaps, and uses a weak test password. Do not reuse these credentials anywhere else.</small>
+              </div>
+            ) : <div className="wallet-backup-panel">
               <strong>Back up this wallet secret now</strong>
               <span>It is shown only on this screen. Anyone with this key can control the wallet. The server only stores its encrypted form.</span>
               <code>{JSON.stringify(Array.from(newKeypair.secretKey))}</code>
               <button className="button button-secondary" type="button" onClick={() => void copySecretKey()}>{copied ? "Copied — store it safely" : "Copy Solana CLI keypair JSON"}</button>
               <label className="account-checkbox"><input type="checkbox" checked={savedKey} onChange={(event) => setSavedKey(event.target.checked)} /><span>I saved this secret key securely. I understand that losing my password and key can mean permanent loss of access.</span></label>
-            </div>
-            <button className="button button-live" type="submit" disabled={busy || !savedKey}>{busy ? "Creating account…" : "Create account & assign wallet"}</button>
+            </div>}
+            <button className="button button-live" type="submit" disabled={busy || (!isDemoSignup && !savedKey)}>{busy ? "Creating account…" : isDemoSignup ? "Create local demo admin" : "Create account & assign wallet"}</button>
           </form>
         ) : (
           <form className="account-form" onSubmit={(event) => void submitLogin(event)}>
@@ -309,9 +341,9 @@ export default function AccountGate({ onUnlocked }) {
         )}
 
         <div className="account-safety">
-          <strong>Self-custody and real Mainnet funds</strong>
-          <span>The wallet is created on your device. Its key is encrypted with your account password before upload; the API/database cannot decrypt it. There is no password reset recovery for the wallet.</span>
-          <span>Never share the displayed key. Verify every swap and mint before signing.</span>
+          <strong>{isDemoSignup ? "Local demo account · no Mainnet swaps" : "Self-custody and real Mainnet funds"}</strong>
+          <span>{isDemoSignup ? "This is a local-only account for exercising the admin interface. Never send funds to its generated address." : "The wallet is created on your device. Its key is encrypted with your account password before upload; the API/database cannot decrypt it. There is no password reset recovery for the wallet."}</span>
+          <span>{isDemoSignup ? "Use only on localhost. The demo password is intentionally weak and must never be reused." : "Never share the displayed key. Verify every swap and mint before signing."}</span>
         </div>
         {!account && (
           <button className="text-button account-mode-switch" onClick={() => changeMode(mode === "register" ? "login" : "register")}>

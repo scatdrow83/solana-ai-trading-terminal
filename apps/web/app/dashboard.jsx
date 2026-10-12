@@ -7,12 +7,20 @@ import AccountGate from "./account-gate";
 import TradeTicket from "./trade-ticket";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const STATIC_TOKEN_LOGOS = {
+  [SOL_MINT]: `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${SOL_MINT}/logo.png`,
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:
+    "https://cdn.dexscreener.com/cms/images/913e72ef4901644569197a61dd198656ab488e9cd648a326fc2fca21b0d2521d?width=800&height=800&quality=95&format=auto",
+  JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN:
+    "https://static.jup.ag/jup/icon.png"
+};
 const DEFAULT_WATCHLIST = [SOL_MINT];
 const REFRESH_OPTIONS = [15_000, 30_000, 60_000];
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "grid", group: "Workspace" },
   { id: "markets", label: "Markets", icon: "chart", group: "Workspace" },
+  { id: "new-tokens", label: "New tokens", icon: "activity", group: "Workspace" },
   { id: "watchlist", label: "Watchlist", icon: "bookmark", group: "Workspace" },
   { id: "portfolio", label: "Portfolio", icon: "wallet", group: "Trading" },
   { id: "activity", label: "Activity", icon: "activity", group: "Trading" },
@@ -30,6 +38,11 @@ const VIEW_TITLES = {
     eyebrow: "MARKET EXPLORER",
     title: "Find your next signal.",
     subtitle: "Explore tokens and liquidity across Solana DEXs."
+  },
+  "new-tokens": {
+    eyebrow: "TOKEN DISCOVERY",
+    title: "Fresh Solana listings.",
+    subtitle: "Recently surfaced Solana tokens and active pools indexed across DEXs."
   },
   watchlist: {
     eyebrow: "YOUR WATCHLIST",
@@ -52,9 +65,9 @@ const VIEW_TITLES = {
     subtitle: "Market refresh and staging environment settings."
   },
   admin: {
-    eyebrow: "LOCAL SECURITY TEST",
-    title: "Admin access simulator.",
-    subtitle: "Inspect public wallet metadata and exercise a non-broadcast withdrawal scenario."
+    eyebrow: "ADMIN COMMAND DECK",
+    title: "Station operations.",
+    subtitle: "Review live account activity and configure token operations with explicit wallet authorization."
   }
 };
 
@@ -93,8 +106,11 @@ function parseMarket(value) {
     pairAddress: typeof value.pairAddress === "string" ? value.pairAddress : "",
     dexId: typeof value.dexId === "string" ? value.dexId : "unknown",
     url: typeof value.url === "string" ? value.url : null,
+    logoUri: typeof value.logoUri === "string" ? value.logoUri : null,
     source: value.source,
-    observedAt: value.observedAt
+    observedAt: value.observedAt,
+    firstSeenAt: typeof value.firstSeenAt === "string" ? value.firstSeenAt : null,
+    lastSeenAt: typeof value.lastSeenAt === "string" ? value.lastSeenAt : null
   };
 }
 
@@ -108,10 +124,40 @@ function parseMarkets(value) {
   });
 }
 
-async function requestJson(url) {
+function parsePortfolio(value) {
+  if (
+    !isRecord(value) ||
+    typeof value.walletAddress !== "string" ||
+    !Array.isArray(value.balances) ||
+    !(value.totalUsd === null || (typeof value.totalUsd === "number" && Number.isFinite(value.totalUsd))) ||
+    typeof value.pricedTotalUsd !== "number" ||
+    !Number.isFinite(value.pricedTotalUsd) ||
+    typeof value.unpricedCount !== "number" ||
+    typeof value.omittedCount !== "number" ||
+    typeof value.truncated !== "boolean" ||
+    typeof value.observedAt !== "string"
+  ) {
+    throw new Error("The account service returned invalid portfolio data.");
+  }
+  const balances = value.balances.filter((balance) =>
+    isRecord(balance) &&
+    typeof balance.mintAddress === "string" &&
+    typeof balance.symbol === "string" &&
+    typeof balance.name === "string" &&
+    typeof balance.amount === "string" &&
+    (balance.priceUsd === null || (typeof balance.priceUsd === "number" && Number.isFinite(balance.priceUsd))) &&
+    (balance.valueUsd === null || (typeof balance.valueUsd === "number" && Number.isFinite(balance.valueUsd)))
+  );
+  if (balances.length !== value.balances.length) {
+    throw new Error("The account service returned invalid portfolio balances.");
+  }
+  return { ...value, balances };
+}
+
+async function requestJson(url, timeoutMs = 10_000) {
   const response = await fetch(url, {
     cache: "no-store",
-    signal: AbortSignal.timeout(10_000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const body = await response.json();
   if (!response.ok) {
@@ -208,6 +254,31 @@ function Icon({ name, size = 18 }) {
   }
 }
 
+function TokenAvatar({ market, className }) {
+  const [imageUnavailable, setImageUnavailable] = useState(false);
+  const logoUri =
+    market.logoUri ??
+    STATIC_TOKEN_LOGOS[market.mintAddress] ??
+    `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${encodeURIComponent(market.mintAddress)}/logo.png`;
+  useEffect(() => setImageUnavailable(false), [logoUri]);
+
+  return (
+    <span className={className} aria-hidden="true">
+      {!imageUnavailable ? (
+        <img
+          src={logoUri}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setImageUnavailable(true)}
+        />
+      ) : (
+        market.symbol.slice(0, 1)
+      )}
+    </span>
+  );
+}
+
 function ChangeBadge({ value }) {
   const positive = value !== null && value >= 0;
   return (
@@ -266,22 +337,23 @@ function MarketTable({
   selectedMint,
   onSelect,
   watchlist,
-  onToggleWatchlist
+  onToggleWatchlist,
+  showDiscoveryMetadata = false
 }) {
   if (markets.length === 0) {
-    return <div className="empty-state"><span className="empty-state-icon"><Icon name="chart" size={22} /></span><strong>No live markets found</strong><span>Try a token symbol or paste a different mint address.</span></div>;
+    return <div className="empty-state"><span className="empty-state-icon"><Icon name="chart" size={22} /></span><strong>{showDiscoveryMetadata ? "No new markets detected yet" : "No live markets found"}</strong><span>{showDiscoveryMetadata ? "New listings appear after DexScreener indexes a Solana token and its market." : "Try a token symbol or paste a different mint address."}</span></div>;
   }
 
   return (
     <div className="table-scroll">
       <table className="market-table">
-        <thead><tr><th>Asset</th><th>Price</th><th>24h change</th><th>24h volume</th><th>Liquidity</th><th aria-label="Actions" /></tr></thead>
+        <thead><tr><th>Asset</th><th>Price</th><th>24h change</th><th>24h volume</th><th>Liquidity</th>{showDiscoveryMetadata && <><th>DEX</th><th>First seen</th></>}<th aria-label="Actions" /></tr></thead>
         <tbody>
           {markets.map((market, index) => (
             <tr key={market.mintAddress} className={market.mintAddress === selectedMint ? "selected-row" : ""}>
               <td>
                 <button className="asset-cell" title={`${market.name} · ${market.mintAddress}`} onClick={() => onSelect(market)}>
-                  <span className={`token-avatar token-color-${index % 5}`}>{market.symbol.slice(0, 1)}</span>
+                  <TokenAvatar market={market} className={`token-avatar token-color-${index % 5}`} />
                   <span className="asset-names"><strong>{market.symbol}</strong><small>{market.name} · {shortMint(market.mintAddress)}</small></span>
                 </button>
               </td>
@@ -289,6 +361,7 @@ function MarketTable({
               <td><ChangeBadge value={market.priceChange24h} /></td>
               <td className="number-cell">{formatCurrency(market.volume24hUsd)}</td>
               <td className="number-cell">{formatCurrency(market.liquidityUsd)}</td>
+              {showDiscoveryMetadata && <><td>{market.dexId}</td><td>{market.firstSeenAt ? formatTime(market.firstSeenAt) : "—"}</td></>}
               <td className="action-cell"><button className={`icon-button ${watchlist.includes(market.mintAddress) ? "is-saved" : ""}`} aria-label={`${watchlist.includes(market.mintAddress) ? "Remove from" : "Add to"} watchlist`} onClick={() => onToggleWatchlist(market.mintAddress)}><Icon name="bookmark" size={16} /></button></td>
             </tr>
           ))}
@@ -298,9 +371,85 @@ function MarketTable({
   );
 }
 
+function RecommendationFeed({ onSelect }) {
+  const [recommendations, setRecommendations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = await requestJson("/api/recommendations");
+        if (!isRecord(result) || !Array.isArray(result.recommendations)) {
+          throw new Error("The recommendation service returned an unexpected response.");
+        }
+        const parsed = result.recommendations.flatMap((entry) => {
+          if (!isRecord(entry) || typeof entry.note !== "string") return [];
+          const market = parseMarket(entry);
+          return market ? [{ ...market, note: entry.note, recommendedAt: entry.recommendedAt }] : [];
+        });
+        if (!cancelled) {
+          setRecommendations(parsed);
+          setError(null);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : "Could not load administrator recommendations.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <section className="panel recommendation-feed">
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">ADMIN MARKET WATCH</span>
+          <div className="panel-title-line"><h2>Featured token watchlist</h2><span className="result-count">{recommendations.length}</span></div>
+          <p>Manually selected market listings from the administrator.</p>
+        </div>
+        <span className="status-pill">Not financial advice</span>
+      </div>
+      {error ? (
+        <div className="trade-feedback is-error" role="alert">{error}</div>
+      ) : recommendations.length ? (
+        <div className="recommendation-cards">
+          {recommendations.map((recommendation, index) => (
+            <article className="recommendation-card" key={recommendation.mintAddress}>
+              <div className="recommendation-token">
+                <TokenAvatar market={recommendation} className={`token-avatar token-color-${index % 5}`} />
+                <span><strong>{recommendation.symbol}</strong><small>{recommendation.name} · {shortMint(recommendation.mintAddress)}</small></span>
+                <strong className="recommendation-price">{formatPrice(recommendation.priceUsd)}</strong>
+              </div>
+              <p>{recommendation.note}</p>
+              <div className="recommendation-card-footer">
+                <span><ChangeBadge value={recommendation.priceChange24h} /> · {recommendation.dexId}</span>
+                <button className="button button-secondary" type="button" onClick={() => onSelect(recommendation)}>Inspect market</button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="history-empty"><p>{loading ? "Loading administrator recommendations…" : "No featured tokens yet. Check back later."}</p></div>
+      )}
+      <p className="recommendation-disclaimer">A recommendation does not guarantee performance or indicate that a token is safe. Verify its mint, liquidity and risks independently. Nothing is purchased automatically.</p>
+    </section>
+  );
+}
+
 function TerminalDashboard({ account, walletKeypair, onLogout }) {
   const [view, setView] = useState("overview");
   const [markets, setMarkets] = useState([]);
+  const [newTokens, setNewTokens] = useState([]);
   const [market, setMarket] = useState(null);
   const [watchlistMarketData, setWatchlistMarketData] = useState([]);
   const [snapshots, setSnapshots] = useState([]);
@@ -321,6 +470,9 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
   const [trades, setTrades] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState(null);
 
   const updateTradeHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -336,6 +488,28 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
     } finally {
       setHistoryLoading(false);
     }
+  }, []);
+
+  const updatePortfolio = useCallback(async () => {
+    setPortfolioLoading(true);
+    setPortfolioError(null);
+    try {
+      setPortfolio(parsePortfolio(await requestJson("/api/wallet", 25_000)));
+    } catch (requestError) {
+      setPortfolioError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Wallet balances are unavailable."
+      );
+    } finally {
+      setPortfolioLoading(false);
+    }
+  }, []);
+
+  const updateNewTokens = useCallback(async () => {
+    setNewTokens(parseMarkets(await requestJson("/api/market?view=new")));
+    setLastUpdated(new Date().toISOString());
+    setError(null);
   }, []);
 
   const updateOverview = useCallback(async () => {
@@ -387,6 +561,20 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
   useEffect(() => {
     if (view === "activity") void updateTradeHistory();
   }, [updateTradeHistory, view]);
+
+  useEffect(() => {
+    if (view !== "portfolio" || account.isDemo) return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (!cancelled) await updatePortfolio();
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), refreshMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [account.isDemo, refreshMs, updatePortfolio, view]);
 
   useEffect(() => {
     try {
@@ -444,13 +632,32 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
         if (!cancelled) setIsLoading(false);
       }
     };
+    if (view === "new-tokens") {
+      const refreshDiscoveries = async () => {
+        try {
+          await updateNewTokens();
+        } catch (requestError) {
+          if (!cancelled) {
+            setError(requestError instanceof Error ? requestError.message : "Token discovery is unavailable.");
+          }
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+      };
+      void refreshDiscoveries();
+      const interval = window.setInterval(() => void refreshDiscoveries(), refreshMs);
+      return () => {
+        cancelled = true;
+        window.clearInterval(interval);
+      };
+    }
     void refresh();
     const interval = window.setInterval(() => void refresh(), refreshMs);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [market?.mintAddress, refreshMs, updateOverview, updateSelectedMarket, updateWatchlistMarkets, view]);
+  }, [market?.mintAddress, refreshMs, updateNewTokens, updateOverview, updateSelectedMarket, updateWatchlistMarkets, view]);
 
   const pageCopy = VIEW_TITLES[view];
   const marketConnected = Boolean(lastUpdated && !error);
@@ -516,6 +723,10 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
   const refreshNow = async () => {
     setIsLoading(true);
     try {
+      if (view === "new-tokens") {
+        await updateNewTokens();
+        return;
+      }
       await updateOverview();
       await updateSelectedMarket(market?.mintAddress ?? SOL_MINT);
     } catch (requestError) {
@@ -562,9 +773,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
             <div className="nav-group" key={group}>
               <span className="nav-group-label">{group}</span>
               {NAV_ITEMS.filter((item) => item.group === group && (
-                item.id !== "admin" || (
-                  account.isDemo && account.email === "admin@local.test"
-                )
+                item.id !== "admin" || account.isAdmin
               )).map((item) => (
                 <button
                   key={item.id}
@@ -618,7 +827,7 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
               <div className="ribbon-assets">
                 {markets.slice(0, 4).map((item) => (
                   <button className="ribbon-asset" key={item.mintAddress} onClick={() => selectMarket(item)}>
-                    <span className={`ribbon-token token-color-${markets.indexOf(item) % 5}`}>{item.symbol.slice(0, 1)}</span>
+                    <TokenAvatar market={item} className={`ribbon-token token-color-${markets.indexOf(item) % 5}`} />
                     <span className="ribbon-symbol">{item.symbol}</span><strong>{formatPrice(item.priceUsd)}</strong><ChangeBadge value={item.priceChange24h} />
                   </button>
                 ))}
@@ -628,11 +837,29 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
             </section>
           )}
 
+          {view === "new-tokens" && (
+            <RecommendationFeed onSelect={selectMarket} />
+          )}
+
+          {view === "new-tokens" && (
+            <section className="panel markets-panel">
+              <div className="panel-heading markets-heading">
+                <div>
+                  <div className="panel-title-line"><h2>Recently discovered tokens</h2><span className="result-count">{newTokens.length}</span></div>
+                  <p>Aggregated from DexScreener's latest Solana token profiles and boosts; pairs span the DEXs indexed by DexScreener.</p>
+                </div>
+                <span className="status-pill"><span className="status-dot" />Auto-refresh {refreshMs / 1000}s</span>
+              </div>
+              <MarketTable markets={newTokens} selectedMint={market?.mintAddress ?? null} onSelect={selectMarket} watchlist={watchlist} onToggleWatchlist={toggleWatchlist} showDiscoveryMetadata />
+              <div className="table-footer"><span><span className="status-dot" />Discovery feed: DexScreener</span><span>First seen means first detected by this service, not token creation time.</span></div>
+            </section>
+          )}
+
           {(view === "overview" || view === "markets" || view === "watchlist") && (
             <section className="stats-grid" aria-label="Selected asset statistics">
               <article className="stat-card stat-card-featured">
                 <div className="stat-head"><span>Selected asset</span><span className="stat-icon"><Icon name="chart" size={16} /></span></div>
-                <strong className="stat-value stat-token-value">{market ? <><span className="token-avatar token-color-0">{market.symbol.slice(0, 1)}</span><span>{market.symbol}<small>{market.name}</small></span></> : isLoading ? "Loading…" : "No asset selected"}</strong>
+                <strong className="stat-value stat-token-value">{market ? <><TokenAvatar market={market} className="token-avatar token-color-0" /><span>{market.symbol}<small>{market.name}</small></span></> : isLoading ? "Loading…" : "No asset selected"}</strong>
                 <span className="stat-foot">{market ? shortMint(market.mintAddress) : "Select a market to inspect"}</span>
               </article>
               <article className="stat-card"><div className="stat-head"><span>Last price</span><span className="stat-icon"><Icon name="activity" size={16} /></span></div><strong className="stat-value">{market ? formatPrice(market.priceUsd) : "—"}</strong><span className="stat-foot"><ChangeBadge value={marketChange} /><span>24 hour change</span></span></article>
@@ -688,10 +915,40 @@ function TerminalDashboard({ account, walletKeypair, onLogout }) {
             </section>
           )}
 
-          {view === "portfolio" && <section className="empty-panel panel"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><span className="eyebrow">MAINNET WALLET</span><h2>Account wallet</h2><p>{walletAddress}. Token balance indexing is not configured yet. Swap records and transaction signatures appear in Activity.</p><a className="button button-secondary" href={`https://solscan.io/account/${walletAddress}`} target="_blank" rel="noreferrer">View on Solscan<Icon name="arrow" size={15} /></a></section>}
+          {view === "portfolio" && (account.isDemo
+            ? <section className="empty-panel panel"><span className="empty-state-icon"><Icon name="shield" size={24} /></span><span className="eyebrow">LOCAL DEMO WALLET</span><h2>Mainnet balances are disabled</h2><p>The demo account cannot read or trade real wallet assets. Sign in with a non-demo account to view live balances.</p></section>
+            : <section className="panel portfolio-panel">
+              <div className="panel-heading">
+                <div><span className="eyebrow">MAINNET WALLET</span><h2>Account portfolio</h2><p><code>{walletAddress}</code></p></div>
+                <div className="portfolio-actions"><span className="status-pill"><span className="status-dot" />Live read-only</span><button className="button button-secondary" onClick={() => void updatePortfolio()} disabled={portfolioLoading}><Icon name="refresh" size={15} />{portfolioLoading ? "Refreshing…" : "Refresh"}</button></div>
+              </div>
+              {portfolioError && <div className="trade-feedback is-error" role="alert">{portfolioError}</div>}
+              {portfolio && <div className="portfolio-summary">
+                <div><span>Portfolio value</span><strong>{portfolio.totalUsd === null ? "Partial valuation" : formatCurrency(portfolio.totalUsd)}</strong><small>{[
+                  portfolio.unpricedCount ? `${portfolio.unpricedCount} asset${portfolio.unpricedCount === 1 ? "" : "s"} not priced by DexScreener` : null,
+                  portfolio.omittedCount ? `${portfolio.omittedCount} additional assets not scanned` : null
+                ].filter(Boolean).join("; ") || `Updated ${formatTime(portfolio.observedAt)}`}</small></div>
+                {portfolio.totalUsd === null && <div className="portfolio-subtotal"><span>Priced assets subtotal</span><strong>{formatCurrency(portfolio.pricedTotalUsd)}</strong></div>}
+                {portfolio.truncated && <span className="portfolio-truncated">Showing up to 100 of 300 scanned assets</span>}
+              </div>}
+              {portfolioLoading && !portfolio && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><p>Reading confirmed Solana balances…</p></div>}
+              {portfolio && <div className="history-table-wrap">
+                <table className="history-table portfolio-table"><thead><tr><th>Asset</th><th>Balance</th><th>Price</th><th>Value</th><th>Mint</th></tr></thead>
+                  <tbody>{portfolio.balances.map((asset) => <tr key={asset.mintAddress}>
+                    <td><span className="portfolio-asset"><TokenAvatar market={asset} className="token-icon" /><span><strong>{asset.symbol}</strong><small>{asset.name}</small></span></span></td>
+                    <td>{new Intl.NumberFormat("en-US", { maximumSignificantDigits: 10 }).format(Number(asset.amount))}</td>
+                    <td>{asset.priceUsd === null ? "—" : formatCurrency(asset.priceUsd)}</td>
+                    <td>{asset.valueUsd === null ? "Unpriced" : formatCurrency(asset.valueUsd)}</td>
+                    <td><a href={`https://solscan.io/account/${encodeURIComponent(asset.mintAddress)}`} target="_blank" rel="noreferrer"><code>{shortMint(asset.mintAddress)}</code><Icon name="arrow" size={13} /></a></td>
+                  </tr>)}</tbody>
+                </table>
+              </div>}
+              {!portfolioLoading && !portfolioError && portfolio && portfolio.balances.length === 0 && <div className="history-empty"><span className="empty-state-icon"><Icon name="wallet" size={24} /></span><h3>No assets found</h3><p>This wallet has no SOL or SPL token balances on Solana Mainnet.</p></div>}
+              <div className="portfolio-footnote">Balances are confirmed from Solana RPC. USD valuations are estimates from DexScreener; unpriced assets are excluded from the total.</div>
+            </section>)}
           {view === "activity" && <section className="panel history-panel"><div className="panel-heading"><div><span className="eyebrow">MAINNET ACTIVITY</span><h2>Swap history</h2><p>Recent swaps created by this account</p></div><button className="button button-secondary" onClick={() => void updateTradeHistory()} disabled={historyLoading}><Icon name="refresh" size={15} />{historyLoading ? "Loading…" : "Refresh"}</button></div>{historyError && <div className="trade-feedback is-error" role="alert">{historyError}</div>}{trades.length ? <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Direction</th><th>Assets</th><th>Status</th><th>Time</th><th>Transaction</th></tr></thead><tbody>{trades.map((trade) => <tr key={trade.request_id}><td><span className={`history-side ${trade.side === "buy" ? "is-buy" : "is-sell"}`}>{trade.side}</span></td><td><code>{shortMint(trade.input_mint)} → {shortMint(trade.output_mint)}</code></td><td><span className={`history-status status-${trade.status}`}>{trade.status.replaceAll("_", " ")}</span></td><td>{formatTime(trade.created_at)}</td><td>{trade.signature ? <a href={`https://solscan.io/tx/${encodeURIComponent(trade.signature)}`} target="_blank" rel="noreferrer">View on Solscan <Icon name="arrow" size={13} /></a> : "—"}</td></tr>)}</tbody></table></div> : !historyLoading && !historyError && <div className="history-empty"><span className="empty-state-icon"><Icon name="activity" size={24} /></span><h3>No swaps yet</h3><p>Once you place a swap, its status and on-chain transaction link will appear here.</p><button className="button button-secondary" onClick={() => setView("markets")}>Explore markets<Icon name="arrow" size={15} /></button></div>}</section>}
           {view === "settings" && <section className="panel settings-panel"><div className="panel-heading"><div><h2>Trading & market settings</h2><p>Live swaps on Solana Mainnet require your explicit submit action.</p></div></div><label className="setting-row" htmlFor="refresh-rate"><span><strong>Market refresh interval</strong><small>Applies to live token and overview data.</small></span><select id="refresh-rate" value={refreshMs} onChange={(event) => setRefreshMs(Number(event.target.value))}>{REFRESH_OPTIONS.map((option) => <option value={option} key={option}>{option / 1000} seconds</option>)}</select></label><div className="setting-row"><span><strong>Market data provider</strong><small>Public market prices</small></span><span className="status-pill"><span className="status-dot" />DexScreener</span></div><div className="setting-row"><span><strong>Trading mode</strong><small>Real transactions on Solana Mainnet</small></span><span className="mode-chip"><Icon name="shield" size={14} />Live Mainnet</span></div><div className="setting-row"><span><strong>Swap provider</strong><small>Server-side Jupiter API key required</small></span><span className={tradeStatus?.enabled ? "status-pill" : "disabled-label"}>{tradeStatus?.enabled ? "Ready" : "Setup required"}</span></div><div className="setting-row"><span><strong>Wallet signing</strong><small>The unlocked account key signs in this browser after your explicit action.</small></span><span className="status-pill">{walletName}</span></div><div className="setting-row"><span><strong>Local watchlist</strong><small>Saved in this browser; never sent to the API.</small></span><button className="text-button" onClick={() => { setWatchlist(DEFAULT_WATCHLIST); }}>Reset watchlist</button></div></section>}
-          {view === "admin" && account.isDemo && account.email === "admin@local.test" && <AdminWalletPanel />}
+          {view === "admin" && account.isAdmin && <AdminWalletPanel isLocalSimulator={account.isDemo} />}
         </div>
         <footer className="app-footer"><span>Solana Terminal <span className="footer-separator">·</span> Local staging</span><span><span className="status-dot" />Solana Mainnet <span className="footer-separator">·</span> Every swap requires explicit submit</span></footer>
       </main>

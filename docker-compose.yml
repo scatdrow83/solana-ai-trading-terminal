@@ -35,6 +35,7 @@ services:
       APP_SECRET_KEY: ${APP_SECRET_KEY:-local-staging-session-secret-change-before-deploy}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       LOCAL_SECURITY_SIMULATOR: ${LOCAL_SECURITY_SIMULATOR:-true}
+      MARKET_DISCOVERY_TOKEN: ${MARKET_DISCOVERY_TOKEN:-local-staging-discovery-token-change-before-deploy}
       RATELIMIT_STORAGE_URI: memory://
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
@@ -63,6 +64,9 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 4001
+      API_INTERNAL_URL: http://api:4000
+      MARKET_DISCOVERY_TOKEN: ${MARKET_DISCOVERY_TOKEN:-local-staging-discovery-token-change-before-deploy}
+      MARKET_DISCOVERY_INTERVAL_MS: ${MARKET_DISCOVERY_INTERVAL_MS:-30000}
     ports:
       - "127.0.0.1:${WORKER_HEALTH_PORT:-4001}:4001"
     healthcheck:

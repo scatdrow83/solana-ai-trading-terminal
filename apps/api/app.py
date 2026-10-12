@@ -30,7 +30,11 @@ DEXSCREENER_API = "https://api.dexscreener.com"
 JUPITER_SWAP_API = "https://api.jup.ag/swap/v2"
 SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com"
 MAX_SOLANA_TRANSACTION_BYTES = 1232
+MAX_PORTFOLIO_TOKEN_ASSETS = 300
+MAX_SPL_TOKEN_AMOUNT = 2**64 - 1
 SOL_MINT = "So11111111111111111111111111111111111111112"
+SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 MINT_PATTERN = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 ORDER_AMOUNT_PATTERN = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d{1,9})?$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
@@ -93,6 +97,13 @@ class PostgresDatabase:
         with self.connect() as connection:
             connection.execute("SELECT 1")
 
+    def mark_local_demo_admin(self) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE app_users SET is_demo = true WHERE email = %s",
+                ("admin@local.test",),
+            )
+
     def create_account(
         self,
         user_id: str,
@@ -100,12 +111,14 @@ class PostgresDatabase:
         password_hash: str,
         wallet_address: str,
         encrypted_secret: dict[str, Any],
+        is_admin: bool = False,
+        is_demo: bool = False,
     ) -> bool:
         try:
             with self.connect() as connection:
                 connection.execute(
-                    "INSERT INTO app_users (id, email, password_hash) VALUES (%s, %s, %s)",
-                    (user_id, email, password_hash),
+                    "INSERT INTO app_users (id, email, password_hash, is_admin, is_demo) VALUES (%s, %s, %s, %s, %s)",
+                    (user_id, email, password_hash, is_admin, is_demo),
                 )
                 connection.execute(
                     "INSERT INTO wallets (user_id, address, encrypted_secret) VALUES (%s, %s, %s)",
@@ -119,7 +132,7 @@ class PostgresDatabase:
         with self.connect(row_factory=dict_row) as connection:
             return connection.execute(
                 """
-                SELECT u.id::text AS id, u.email, u.password_hash,
+                SELECT u.id::text AS id, u.email, u.password_hash, u.is_admin,
                        u.is_demo, w.address AS wallet_address
                 FROM app_users AS u
                 JOIN wallets AS w ON w.user_id = u.id
@@ -135,7 +148,7 @@ class PostgresDatabase:
         with self.connect(row_factory=dict_row) as connection:
             return connection.execute(
                 f"""
-                SELECT u.id::text AS id, u.email, u.is_demo,
+                SELECT u.id::text AS id, u.email, u.is_admin, u.is_demo,
                        w.address AS wallet_address
                        {encrypted_column}
                 FROM app_users AS u
@@ -220,6 +233,25 @@ class PostgresDatabase:
             row["created_at"] = row["created_at"].isoformat()
         return rows
 
+    def list_wallet_registry(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        with self.connect(row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                SELECT u.id::text AS user_id, u.email, u.is_demo,
+                       w.address AS wallet_address, w.created_at
+                FROM app_users AS u
+                JOIN wallets AS w ON w.user_id = u.id
+                ORDER BY w.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            ).fetchall()
+        for row in rows:
+            row["created_at"] = row["created_at"].isoformat()
+        return rows
+
     def simulate_admin_withdrawal(
         self,
         admin_user_id: str,
@@ -297,6 +329,141 @@ class PostgresDatabase:
             row["created_at"] = row["created_at"].isoformat()
         return rows
 
+    def upsert_discovered_tokens(
+        self, markets: list[dict[str, Any]]
+    ) -> int:
+        if not markets:
+            return 0
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO discovered_tokens (
+                        mint_address, symbol, name, price_usd, liquidity_usd,
+                        volume_24h_usd, price_change_24h, market_cap_usd, fdv_usd,
+                        pair_address, dex_id, url, logo_uri, source, last_seen_at
+                    ) VALUES (
+                        %(mintAddress)s, %(symbol)s, %(name)s, %(priceUsd)s,
+                        %(liquidityUsd)s, %(volume24hUsd)s, %(priceChange24h)s,
+                        %(marketCapUsd)s, %(fdvUsd)s, %(pairAddress)s, %(dexId)s,
+                        %(url)s, %(logoUri)s, %(source)s, now()
+                    )
+                    ON CONFLICT (mint_address) DO UPDATE SET
+                        symbol = EXCLUDED.symbol,
+                        name = EXCLUDED.name,
+                        price_usd = EXCLUDED.price_usd,
+                        liquidity_usd = EXCLUDED.liquidity_usd,
+                        volume_24h_usd = EXCLUDED.volume_24h_usd,
+                        price_change_24h = EXCLUDED.price_change_24h,
+                        market_cap_usd = EXCLUDED.market_cap_usd,
+                        fdv_usd = EXCLUDED.fdv_usd,
+                        pair_address = EXCLUDED.pair_address,
+                        dex_id = EXCLUDED.dex_id,
+                        url = EXCLUDED.url,
+                        logo_uri = COALESCE(EXCLUDED.logo_uri, discovered_tokens.logo_uri),
+                        source = EXCLUDED.source,
+                        last_seen_at = now()
+                    """,
+                    markets,
+                )
+        return len(markets)
+
+    def list_discovered_tokens(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect(row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                SELECT mint_address AS "mintAddress", symbol, name,
+                       price_usd AS "priceUsd", liquidity_usd AS "liquidityUsd",
+                       volume_24h_usd AS "volume24hUsd",
+                       price_change_24h AS "priceChange24h",
+                       market_cap_usd AS "marketCapUsd", fdv_usd AS "fdvUsd",
+                       pair_address AS "pairAddress", dex_id AS "dexId", url,
+                       logo_uri AS "logoUri",
+                       source, first_seen_at AS "firstSeenAt",
+                       last_seen_at AS "lastSeenAt"
+                FROM discovered_tokens
+                ORDER BY first_seen_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        for row in rows:
+            for key in (
+                "priceUsd",
+                "liquidityUsd",
+                "volume24hUsd",
+                "priceChange24h",
+                "marketCapUsd",
+                "fdvUsd",
+            ):
+                if row[key] is not None:
+                    row[key] = float(row[key])
+            row["firstSeenAt"] = row["firstSeenAt"].isoformat()
+            row["lastSeenAt"] = row["lastSeenAt"].isoformat()
+            row["observedAt"] = row["lastSeenAt"]
+        return rows
+
+    def create_token_recommendation(
+        self, mint_address: str, admin_user_id: str, note: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO token_recommendations (mint_address, admin_user_id, note)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (mint_address) DO UPDATE SET
+                    admin_user_id = EXCLUDED.admin_user_id,
+                    note = EXCLUDED.note,
+                    created_at = now()
+                """,
+                (mint_address, admin_user_id, note),
+            )
+
+    def list_token_recommendations(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect(row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                SELECT token.mint_address AS "mintAddress", token.symbol, token.name,
+                       token.price_usd AS "priceUsd",
+                       token.liquidity_usd AS "liquidityUsd",
+                       token.volume_24h_usd AS "volume24hUsd",
+                       token.price_change_24h AS "priceChange24h",
+                       token.market_cap_usd AS "marketCapUsd",
+                       token.fdv_usd AS "fdvUsd", token.pair_address AS "pairAddress",
+                       token.dex_id AS "dexId", token.url, token.logo_uri AS "logoUri",
+                       token.source, token.last_seen_at AS "observedAt",
+                       recommendation.note,
+                       recommendation.created_at AS "recommendedAt"
+                FROM token_recommendations AS recommendation
+                JOIN discovered_tokens AS token USING (mint_address)
+                ORDER BY recommendation.created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        for row in rows:
+            for key in (
+                "priceUsd",
+                "liquidityUsd",
+                "volume24hUsd",
+                "priceChange24h",
+                "marketCapUsd",
+                "fdvUsd",
+            ):
+                if row[key] is not None:
+                    row[key] = float(row[key])
+            row["observedAt"] = row["observedAt"].isoformat()
+            row["recommendedAt"] = row["recommendedAt"].isoformat()
+        return rows
+
+    def delete_token_recommendation(self, mint_address: str) -> bool:
+        with self.connect() as connection:
+            result = connection.execute(
+                "DELETE FROM token_recommendations WHERE mint_address = %s",
+                (mint_address,),
+            )
+        return result.rowcount > 0
+
 
 def fetch_json(url: str) -> Any:
     request_object = urllib.request.Request(
@@ -355,6 +522,15 @@ def finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def valid_token_logo(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != "https" or parsed.hostname != "cdn.dexscreener.com":
+        return None
+    return value
+
+
 def market_from_pair(pair: Any, mint_address: str) -> dict[str, Any] | None:
     if not isinstance(pair, dict) or pair.get("chainId") != "solana":
         return None
@@ -382,6 +558,7 @@ def market_from_pair(pair: Any, mint_address: str) -> dict[str, Any] | None:
     liquidity = pair.get("liquidity")
     volume = pair.get("volume")
     change = pair.get("priceChange")
+    info = pair.get("info")
     liquidity_usd = (
         finite_number(liquidity.get("usd"))
         if isinstance(liquidity, dict)
@@ -405,6 +582,9 @@ def market_from_pair(pair: Any, mint_address: str) -> dict[str, Any] | None:
         "fdvUsd": finite_number(pair.get("fdv")),
         "pairAddress": str(pair.get("pairAddress") or "")[:64],
         "dexId": str(pair.get("dexId") or "unknown")[:32],
+        "logoUri": valid_token_logo(
+            info.get("imageUrl") if is_base and isinstance(info, dict) else None
+        ),
         "url": (
             pair.get("url")
             if isinstance(pair.get("url"), str)
@@ -478,7 +658,16 @@ def create_app(
         .lower()
         == "true"
     )
+    admin_emails = {
+        value.strip().lower()
+        for value in os.environ.get("ADMIN_EMAILS", "").split(",")
+        if value.strip()
+    }
+    admin_bootstrap_token = os.environ.get("ADMIN_BOOTSTRAP_TOKEN", "").strip()
     rate_limit_storage = os.environ.get("RATELIMIT_STORAGE_URI", "memory://").strip()
+    market_discovery_token = os.environ.get(
+        "MARKET_DISCOVERY_TOKEN", "local-staging-discovery-token-change-before-deploy"
+    ).strip()
     if app_environment in {"staging", "production"}:
         if (
             len(app_secret_key) < 32
@@ -501,6 +690,12 @@ def create_app(
             raise RuntimeError("LOCAL_SECURITY_SIMULATOR must be disabled outside local staging")
         if database_initialize:
             raise RuntimeError("DATABASE_INITIALIZE must be false; apply versioned migrations before deployment")
+        if not admin_emails:
+            raise RuntimeError("ADMIN_EMAILS must contain at least one staging/production administrator email")
+        if any(not EMAIL_PATTERN.fullmatch(email) for email in admin_emails):
+            raise RuntimeError("ADMIN_EMAILS must contain valid email addresses")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", admin_bootstrap_token):
+            raise RuntimeError("ADMIN_BOOTSTRAP_TOKEN must be a unique 64-character hexadecimal token")
         if app_environment == "production" and (
             not jupiter_api_key or jupiter_api_key.startswith("replace-with-")
         ):
@@ -510,6 +705,8 @@ def create_app(
         redis_password = urllib.parse.urlsplit(rate_limit_storage).password or ""
         if not re.fullmatch(r"[0-9a-fA-F]{64}", redis_password):
             raise RuntimeError("Redis rate-limit password must be 64 hexadecimal characters")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", market_discovery_token):
+            raise RuntimeError("MARKET_DISCOVERY_TOKEN must be 64 hexadecimal characters")
     if trading_mode != "live" or live_trading_enabled != "true":
         raise RuntimeError(
             "This application only supports live Solana Mainnet mode; "
@@ -532,6 +729,8 @@ def create_app(
     app.config["TRADING_READY"] = trading_ready
     app.config["APP_ENV"] = app_environment
     app.config["LOCAL_SECURITY_SIMULATOR"] = simulator_enabled
+    app.config["ADMIN_EMAILS"] = admin_emails
+    app.config["ADMIN_BOOTSTRAP_TOKEN"] = admin_bootstrap_token
     if app_environment in {"staging", "production"}:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
     limiter = Limiter(
@@ -544,6 +743,12 @@ def create_app(
         database = PostgresDatabase(database_url, database_schema)
     if database is not None and database_initialize:
         database.initialize()
+    if (
+        database is not None
+        and simulator_enabled
+        and app_environment == "staging-local"
+    ):
+        database.mark_local_demo_admin()
     app.config["DATABASE"] = database
     pending_orders: dict[str, dict[str, Any]] = {}
     pending_orders_lock = threading.Lock()
@@ -570,11 +775,17 @@ def create_app(
         return account, None
 
     def public_account(account: dict[str, Any]) -> dict[str, Any]:
+        is_local_admin = (
+            simulator_enabled
+            and account["is_demo"]
+            and hmac.compare_digest(account["email"], "admin@local.test")
+        )
         return {
             "id": account["id"],
             "email": account["email"],
             "walletAddress": account["wallet_address"],
             "isDemo": account["is_demo"],
+            "isAdmin": is_local_admin or account["is_admin"],
         }
 
     def local_admin_required():
@@ -591,6 +802,189 @@ def create_app(
             return None, (jsonify({"error": "admin_required"}), 403)
         return account, None
 
+    def admin_required():
+        account, failure = account_required()
+        if failure:
+            return None, failure
+        is_local_admin = (
+            simulator_enabled
+            and account["is_demo"]
+            and hmac.compare_digest(account["email"], "admin@local.test")
+        )
+        if not is_local_admin and not account["is_admin"]:
+            return None, (jsonify({"error": "admin_required"}), 403)
+        return account, None
+
+    @app.get("/wallet/portfolio")
+    @limiter.limit("30 per minute")
+    def wallet_portfolio():
+        account, failure = account_required()
+        if failure:
+            return failure
+        if account["is_demo"]:
+            return jsonify({"error": "mainnet_wallet_data_disabled_for_demo_account"}), 403
+
+        wallet_address = account["wallet_address"]
+        balance_result = rpc_fetcher(
+            rpc_url,
+            "POST",
+            {
+                "jsonrpc": "2.0",
+                "id": "terminal-wallet-sol-balance",
+                "method": "getBalance",
+                "params": [wallet_address, {"commitment": "confirmed"}],
+            },
+        )
+        sol_result = balance_result.get("result") if isinstance(balance_result, dict) else None
+        sol_value = sol_result.get("value") if isinstance(sol_result, dict) else None
+        if type(sol_value) is not int or not 0 <= sol_value <= MAX_SPL_TOKEN_AMOUNT:
+            raise MarketProviderError("solana_wallet_balance_unavailable", 502)
+
+        token_accounts: dict[str, dict[str, Any]] = {}
+        for token_program in (SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID):
+            token_result = rpc_fetcher(
+                rpc_url,
+                "POST",
+                {
+                    "jsonrpc": "2.0",
+                    "id": f"terminal-wallet-tokens-{token_program[:8]}",
+                    "method": "getTokenAccountsByOwner",
+                    "params": [
+                        wallet_address,
+                        {"programId": token_program},
+                        {"commitment": "confirmed", "encoding": "jsonParsed"},
+                    ],
+                },
+            )
+            parsed_result = token_result.get("result") if isinstance(token_result, dict) else None
+            values = parsed_result.get("value") if isinstance(parsed_result, dict) else None
+            if not isinstance(values, list):
+                raise MarketProviderError("solana_wallet_tokens_unavailable", 502)
+            for entry in values:
+                try:
+                    token_info = entry["account"]["data"]["parsed"]["info"]["tokenAmount"]
+                    mint_address = entry["account"]["data"]["parsed"]["info"]["mint"]
+                    raw_amount = token_info["amount"]
+                    decimals = token_info["decimals"]
+                    if (
+                        not isinstance(mint_address, str)
+                        or not MINT_PATTERN.fullmatch(mint_address)
+                        or not isinstance(raw_amount, str)
+                        or not raw_amount.isdigit()
+                        or len(raw_amount) > 20
+                        or not isinstance(decimals, int)
+                        or isinstance(decimals, bool)
+                        or not 0 <= decimals <= 18
+                    ):
+                        raise ValueError("invalid token amount")
+                    amount = int(raw_amount)
+                    if amount > MAX_SPL_TOKEN_AMOUNT:
+                        raise ValueError("invalid token amount")
+                except (KeyError, TypeError, ValueError) as error:
+                    raise MarketProviderError("invalid_solana_wallet_token_data", 502) from error
+                if amount == 0:
+                    continue
+                holding = token_accounts.get(mint_address)
+                if holding is not None and holding["decimals"] != decimals:
+                    raise MarketProviderError("inconsistent_solana_wallet_token_data", 502)
+                if holding is None:
+                    token_accounts[mint_address] = {"amount": amount, "decimals": decimals}
+                else:
+                    holding["amount"] += amount
+
+        assets: dict[str, dict[str, Any]] = {
+            SOL_MINT: {
+                "mintAddress": SOL_MINT,
+                "symbol": "SOL",
+                "name": "Solana",
+                "amount": format(Decimal(sol_value) / Decimal(1_000_000_000), "f"),
+                "decimals": 9,
+                "priceUsd": None,
+                "valueUsd": None,
+                "logoUri": None,
+            }
+        }
+        ordered_token_accounts = sorted(
+            token_accounts.items(),
+            key=lambda item: Decimal(item[1]["amount"]) / (Decimal(10) ** item[1]["decimals"]),
+            reverse=True,
+        )
+        omitted_count = max(0, len(ordered_token_accounts) - MAX_PORTFOLIO_TOKEN_ASSETS)
+        for mint_address, holding in ordered_token_accounts[:MAX_PORTFOLIO_TOKEN_ASSETS]:
+            assets[mint_address] = {
+                "mintAddress": mint_address,
+                "symbol": "Unknown",
+                "name": "Unknown token",
+                "amount": format(
+                    Decimal(holding["amount"]) / (Decimal(10) ** holding["decimals"]),
+                    "f",
+                ),
+                "decimals": holding["decimals"],
+                "priceUsd": None,
+                "valueUsd": None,
+                "logoUri": None,
+            }
+
+        mint_addresses = list(assets)
+        markets_by_mint: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(mint_addresses), 30):
+            batch = mint_addresses[start : start + 30]
+            market_payload = market_fetcher(provider_token_url(batch))
+            markets_by_mint.update(
+                (market["mintAddress"], market)
+                for market in rank_markets(market_payload, set(batch))
+            )
+
+        priced_total = Decimal(0)
+        unpriced_count = 0
+        for mint_address, asset in assets.items():
+            market = markets_by_mint.get(mint_address)
+            if market is None:
+                unpriced_count += 1
+                continue
+            amount = Decimal(asset["amount"])
+            price = Decimal(str(market["priceUsd"]))
+            value = amount * price
+            asset.update(
+                {
+                    "symbol": market["symbol"],
+                    "name": market["name"],
+                    "priceUsd": float(price),
+                    "valueUsd": float(value),
+                    "logoUri": market["logoUri"],
+                }
+            )
+            priced_total += value
+
+        holdings = sorted(
+            assets.values(),
+            key=lambda asset: (
+                asset["valueUsd"] is not None,
+                asset["valueUsd"] or 0,
+                Decimal(asset["amount"]),
+            ),
+            reverse=True,
+        )
+        truncated = len(holdings) > 100
+        holdings = holdings[:100]
+        return jsonify(
+            {
+                "walletAddress": wallet_address,
+                "balances": holdings,
+                "totalUsd": (
+                    float(priced_total)
+                    if unpriced_count == 0 and omitted_count == 0
+                    else None
+                ),
+                "pricedTotalUsd": float(priced_total),
+                "unpricedCount": unpriced_count,
+                "omittedCount": omitted_count,
+                "truncated": truncated or omitted_count > 0,
+                "source": "Solana RPC and DexScreener",
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     @app.route("/auth", methods=["GET", "POST"])
     @limiter.limit("20 per minute", methods=["POST"])
     def auth():
@@ -605,7 +999,12 @@ def create_app(
             )
             if account is None:
                 session.clear()
-                return jsonify({"authenticated": False})
+                return jsonify({
+                    "authenticated": False,
+                    "demoAvailable": (
+                        simulator_enabled and app_environment == "staging-local"
+                    ),
+                })
             return jsonify({"authenticated": True, "account": public_account(account)})
 
         body = request.get_json(silent=True)
@@ -635,12 +1034,29 @@ def create_app(
             password = body.get("password")
             wallet_address = body.get("walletAddress")
             encrypted_secret = body.get("encryptedWallet")
+            normalized_email = email.strip().lower() if isinstance(email, str) else ""
+            is_demo_registration = (
+                simulator_enabled
+                and app_environment == "staging-local"
+                and normalized_email == "admin@local.test"
+                and password == "admin"
+            )
+            if (
+                simulator_enabled
+                and app_environment == "staging-local"
+                and normalized_email == "admin@local.test"
+                and not is_demo_registration
+            ):
+                return jsonify({"error": "local_demo_credentials_required"}), 400
             if (
                 not isinstance(email, str)
                 or len(email) > 254
                 or not EMAIL_PATTERN.fullmatch(email.strip())
                 or not isinstance(password, str)
-                or not 12 <= len(password) <= 128
+                or not (
+                    (len(password) == 5 and is_demo_registration)
+                    or 12 <= len(password) <= 128
+                )
                 or not isinstance(wallet_address, str)
                 or not MINT_PATTERN.fullmatch(wallet_address)
                 or not isinstance(encrypted_secret, dict)
@@ -660,7 +1076,13 @@ def create_app(
             if len(salt) != 16 or len(iv) != 12 or len(ciphertext) != 80:
                 return jsonify({"error": "invalid_encrypted_wallet"}), 400
 
-            normalized_email = email.strip().lower()
+            provided_admin_token = body.get("adminBootstrapToken")
+            if normalized_email in admin_emails and (
+                not isinstance(provided_admin_token, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", provided_admin_token)
+                or not hmac.compare_digest(provided_admin_token, admin_bootstrap_token)
+            ):
+                return jsonify({"error": "admin_bootstrap_token_required"}), 403
             user_id = str(uuid.uuid4())
             created = database.create_account(
                 user_id,
@@ -668,6 +1090,8 @@ def create_app(
                 generate_password_hash(password, method="scrypt"),
                 wallet_address,
                 encrypted_secret,
+                is_admin=normalized_email in admin_emails,
+                is_demo=is_demo_registration,
             )
             if not created:
                 return jsonify({"error": "email_or_wallet_already_registered"}), 409
@@ -762,6 +1186,103 @@ def create_app(
             return jsonify({"error": "insufficient_simulated_balance"}), 409
         return jsonify({"withdrawal": result}), 201
 
+    @app.route("/admin/recommendations", methods=["GET", "POST", "DELETE"])
+    @limiter.limit("30 per minute", methods=["POST", "DELETE"])
+    def admin_recommendations():
+        account, failure = admin_required()
+        if failure:
+            return failure
+        if request.method == "GET":
+            return jsonify(
+                {"recommendations": database.list_token_recommendations(limit=100)}
+            )
+        if request.method == "DELETE":
+            mint_address = request.args.get("mint", "")
+            if not MINT_PATTERN.fullmatch(mint_address):
+                return jsonify({"error": "invalid_solana_mint"}), 400
+            if not database.delete_token_recommendation(mint_address):
+                return jsonify({"error": "recommendation_not_found"}), 404
+            return jsonify({"removed": True})
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "json_body_required"}), 400
+        mint_address = body.get("mintAddress")
+        note = body.get("note")
+        if (
+            not isinstance(mint_address, str)
+            or not MINT_PATTERN.fullmatch(mint_address)
+            or not isinstance(note, str)
+            or not 10 <= len(note.strip()) <= 300
+        ):
+            return jsonify({"error": "invalid_token_recommendation"}), 400
+
+        payload = market_fetcher(provider_token_url([mint_address]))
+        market = next(iter(rank_markets(payload, {mint_address})), None)
+        if market is None:
+            return jsonify({"error": "market_data_not_found"}), 404
+        database.upsert_discovered_tokens([market])
+        database.create_token_recommendation(
+            mint_address, account["id"], note.strip()
+        )
+        return jsonify({"recommended": True, "mintAddress": mint_address}), 201
+
+    @app.get("/admin/wallets")
+    @limiter.limit("30 per minute")
+    def admin_wallet_registry():
+        _account, failure = admin_required()
+        if failure:
+            return failure
+        if database is None:
+            return jsonify({"error": "database_not_configured"}), 503
+        try:
+            offset = int(request.args.get("offset", "0"))
+        except ValueError:
+            return jsonify({"error": "offset_must_be_non_negative"}), 400
+        if not 0 <= offset <= 100_000:
+            return jsonify({"error": "offset_must_be_non_negative"}), 400
+
+        wallet_page = database.list_wallet_registry(limit=101, offset=offset)
+        has_more = len(wallet_page) > 100
+        wallets = wallet_page[:100]
+        if not wallets:
+            return jsonify({
+                "mode": "read_only_mainnet",
+                "wallets": [],
+                "hasMore": False,
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            })
+
+        rpc_result = rpc_fetcher(
+            rpc_url,
+            "POST",
+            {
+                "jsonrpc": "2.0",
+                "id": "terminal-admin-wallet-balances",
+                "method": "getMultipleAccounts",
+                "params": [
+                    [wallet["wallet_address"] for wallet in wallets],
+                    {"commitment": "confirmed", "encoding": "base64"},
+                ],
+            },
+        )
+        result = rpc_result.get("result") if isinstance(rpc_result, dict) else None
+        values = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(values, list) or len(values) != len(wallets):
+            raise MarketProviderError("solana_wallet_balance_unavailable", 502)
+        for wallet, chain_account in zip(wallets, values, strict=True):
+            lamports = chain_account.get("lamports") if isinstance(chain_account, dict) else 0
+            if not isinstance(lamports, int) or lamports < 0:
+                raise MarketProviderError("invalid_solana_wallet_balance", 502)
+            wallet["balance_lamports"] = str(lamports)
+
+        return jsonify({
+            "mode": "read_only_mainnet",
+            "wallets": wallets,
+            "hasMore": has_more,
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+        })
+
     @app.get("/health")
     def health():
         database_status = "not_configured"
@@ -778,6 +1299,7 @@ def create_app(
                 "service": "api",
                 "integrations": {
                     "marketData": "dexscreener",
+                    "tokenDiscovery": "ready" if database is not None else "not_configured",
                     "swap": "jupiter" if trading_ready else "not_configured",
                     "database": database_status,
                 },
@@ -1123,6 +1645,86 @@ def create_app(
                 "observedAt": datetime.now(timezone.utc).isoformat(),
             }
         )
+
+    @app.get("/market/new")
+    @limiter.limit("120 per minute")
+    def market_new_tokens():
+        if database is None:
+            return jsonify({"error": "database_not_configured"}), 503
+        try:
+            limit = int(request.args.get("limit", "50"))
+        except ValueError:
+            return jsonify({"error": "limit_must_be_between_1_and_100"}), 400
+        if not 1 <= limit <= 100:
+            return jsonify({"error": "limit_must_be_between_1_and_100"}), 400
+        return jsonify(
+            {
+                "markets": database.list_discovered_tokens(limit),
+                "source": "DexScreener",
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    @app.get("/market/recommendations")
+    @limiter.limit("120 per minute")
+    def market_recommendations():
+        _account, failure = account_required()
+        if failure:
+            return failure
+        if database is None:
+            return jsonify({"error": "database_not_configured"}), 503
+        return jsonify(
+            {
+                "recommendations": database.list_token_recommendations(limit=100),
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    @app.post("/market/discovery/ingest")
+    def market_discovery_ingest():
+        provided_token = request.headers.get("Authorization", "")
+        expected_token = f"Bearer {market_discovery_token}"
+        if not market_discovery_token or not hmac.compare_digest(
+            provided_token, expected_token
+        ):
+            return jsonify({"error": "worker_authentication_required"}), 401
+        if database is None:
+            return jsonify({"error": "database_not_configured"}), 503
+        body = request.get_json(silent=True)
+        addresses = body.get("mintAddresses") if isinstance(body, dict) else None
+        token_icons = body.get("tokenIcons", {}) if isinstance(body, dict) else {}
+        if (
+            not isinstance(addresses, list)
+            or not addresses
+            or len(addresses) > 100
+            or any(
+                not isinstance(address, str)
+                or not MINT_PATTERN.fullmatch(address)
+                for address in addresses
+            )
+        ):
+            return jsonify({"error": "provide_1_to_100_valid_solana_mints"}), 400
+        if not isinstance(token_icons, dict) or any(
+            not isinstance(mint, str)
+            or not MINT_PATTERN.fullmatch(mint)
+            or valid_token_logo(logo_uri) is None
+            for mint, logo_uri in token_icons.items()
+        ):
+            return jsonify({"error": "invalid_token_icons"}), 400
+        mint_addresses = list(dict.fromkeys(addresses))
+        markets = []
+        for start in range(0, len(mint_addresses), 30):
+            batch = mint_addresses[start : start + 30]
+            payload = market_fetcher(provider_token_url(batch))
+            markets.extend(
+                rank_markets(payload, set(batch))
+            )
+        for market in markets:
+            market["logoUri"] = market["logoUri"] or token_icons.get(
+                market["mintAddress"]
+            )
+        stored = database.upsert_discovered_tokens(markets)
+        return jsonify({"accepted": stored, "observedAt": datetime.now(timezone.utc).isoformat()})
 
     return app
 

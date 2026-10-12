@@ -3,9 +3,20 @@ import { NextResponse } from "next/server";
 const noStoreHeaders = { "Cache-Control": "no-store" };
 
 async function proxyAdmin(request: Request, body?: string) {
+  const resource = new URL(request.url).searchParams.get("resource");
+  const endpoint = resource === "wallets"
+    ? "/admin/wallets"
+    : "/admin/security-simulator";
+  const backendUrl = new URL(
+    `${process.env.API_INTERNAL_URL ?? "http://localhost:4000"}${endpoint}`
+  );
+  if (resource === "wallets") {
+    const offset = new URL(request.url).searchParams.get("offset");
+    backendUrl.searchParams.set("offset", offset ?? "0");
+  }
   try {
     const response = await fetch(
-      `${process.env.API_INTERNAL_URL ?? "http://localhost:4000"}/admin/security-simulator`,
+      backendUrl,
       {
         method: body ? "POST" : "GET",
         headers: {

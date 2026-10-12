@@ -41,6 +41,8 @@ export async function GET(request: Request) {
     endpoint = `/market/search?q=${encodeURIComponent(searchQuery)}`;
   } else if (view === "overview") {
     endpoint = "/market/overview";
+  } else if (view === "new") {
+    endpoint = "/market/new";
   } else {
     return NextResponse.json(
       { error: "market_query_required" },

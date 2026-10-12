@@ -25,10 +25,11 @@ i Jupiter `/execute`. Nie ma dodatkowego popupu Phantom/Solflare. Przed kliknię
 sprawdź kierunek, minty i kwotę. Kupno jest ograniczone do 1 SOL. Brak `JUPITER_API_KEY`
 blokuje składanie i wykonywanie swapów.
 
-Lokalne konto `admin@local.test` (hasło `admin`) jest kontem demonstracyjnym;
-API sprawdza flagę demo w bazie i blokuje na nim endpointy order/execute.
-Wyłącznie do lokalnego UI, nie używać portfela do przechowywania ani wysyłania
-środków. Nie udostępniaj stagingu publicznie.
+Lokalne konto `admin@local.test` (hasło `admin`) jest tworzone przy pierwszym
+uruchomieniu z ekranu rejestracji tylko przy `APP_ENV=staging-local` i
+`LOCAL_SECURITY_SIMULATOR=true`. API zapisuje flagę demo w bazie i blokuje na
+nim endpointy order/execute. Wyłącznie do lokalnego UI, nie używać portfela do
+przechowywania ani wysyłania środków. Nie udostępniaj stagingu publicznie.
 
 Zakładka Admin simulator (włączana wyłącznie przez
 `LOCAL_SECURITY_SIMULATOR=true`) pokazuje metadane email/publiczny adres oraz
@@ -36,6 +37,14 @@ zmienia fikcyjne saldo 10 test SOL po symulowanej wypłacie. Zapisuje zdarzenie
 audytowe, ale nie wywołuje Solana RPC, nie składa transakcji i nie wybiera ani
 nie odczytuje `encrypted_secret`. Wyłącz tę funkcję ustawiając
 `LOCAL_SECURITY_SIMULATOR=false` przed wystawieniem innego środowiska.
+
+Role administratora na stagingu/produkcji wymagają `ADMIN_EMAILS`,
+`ADMIN_BOOTSTRAP_TOKEN` i migracji `20261012040000_admin_roles.sql`. Nowe
+konto otrzymuje trwałą rolę dopiero podczas rejestracji allowlistowanego emaila
+z poprawnym tokenem bootstrapu. Samo dopisanie istniejącego emaila do allowlisty
+nie nadaje uprawnień. Panel admina czyta adresy oraz natywne saldo SOL, ale nie
+może wypłacać tokenów/środków z portfeli użytkowników; każda transakcja wymaga
+podpisu właściciela.
 
 ## Wymagania operacyjne
 

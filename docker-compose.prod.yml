@@ -13,6 +13,9 @@ services:
       DATABASE_INITIALIZE: "false"
       SESSION_COOKIE_SECURE: "true"
       LOCAL_SECURITY_SIMULATOR: "false"
+      ADMIN_EMAILS: ${ADMIN_EMAILS:?Set a comma-separated production admin email allowlist}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?Set a unique 64-character admin bootstrap token}
+      MARKET_DISCOVERY_TOKEN: ${MARKET_DISCOVERY_TOKEN:?Set a unique 64-character hexadecimal discovery token}
       RATELIMIT_STORAGE_URI: redis://:${REDIS_PASSWORD:?Generate REDIS_PASSWORD with openssl rand -hex 32}@redis:6379/0
       TRADING_MODE: live
       LIVE_TRADING_ENABLED: "true"
@@ -71,6 +74,9 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 4001
+      API_INTERNAL_URL: http://api:4000
+      MARKET_DISCOVERY_TOKEN: ${MARKET_DISCOVERY_TOKEN:?Set a unique 64-character hexadecimal discovery token}
+      MARKET_DISCOVERY_INTERVAL_MS: ${MARKET_DISCOVERY_INTERVAL_MS:-30000}
     expose:
       - "4001"
     healthcheck:
